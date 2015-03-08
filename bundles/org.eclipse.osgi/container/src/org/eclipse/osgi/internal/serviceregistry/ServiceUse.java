@@ -15,6 +15,8 @@ import org.eclipse.osgi.internal.framework.BundleContextImpl;
 import org.eclipse.osgi.internal.messages.Msg;
 import org.osgi.framework.ServiceException;
 
+import java.lang.Long;
+
 /**
  * This class represents the use of a service by a bundle. One is created for each
  * service acquired by a bundle. 
@@ -30,7 +32,7 @@ public class ServiceUse<S> {
 
 	/** bundle's use count for this service */
 	/* @GuardedBy("this") */
-	private int useCount;
+	private long useCount;
 
 	/**
 	 * Constructs a service use encapsulating the service object.
@@ -150,7 +152,7 @@ public class ServiceUse<S> {
 	 */
 	/* @GuardedBy("this") */
 	void incrementUse() {
-		if (useCount == Integer.MAX_VALUE) {
+		if (useCount == Long.MAX_VALUE) {
 			throw new ServiceException(Msg.SERVICE_USE_OVERFLOW);
 		}
 		useCount++;
