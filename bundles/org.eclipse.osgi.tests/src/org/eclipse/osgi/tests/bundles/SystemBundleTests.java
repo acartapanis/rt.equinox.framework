@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2008, 2014 IBM Corporation and others.
+ * Copyright (c) 2008, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -16,7 +16,9 @@ import java.security.Permission;
 import java.security.PrivilegedAction;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.*;
+import javax.net.SocketFactory;
 import junit.framework.Test;
 import junit.framework.TestSuite;
 import org.eclipse.core.runtime.adaptor.EclipseStarter;
@@ -1290,7 +1292,7 @@ public class SystemBundleTests extends AbstractBundleTests {
 
 		Bundle geturlBundle = systemContext1.installBundle(installer.getBundleLocation("geturl"));
 		geturlBundle.start();
-		PrivilegedAction geturlAction = (PrivilegedAction) systemContext1.getService(systemContext1.getServiceReference(PrivilegedAction.class));
+		PrivilegedAction geturlAction = systemContext1.getService(systemContext1.getServiceReference(PrivilegedAction.class));
 		try {
 			geturlAction.run();
 		} catch (Exception e) {
@@ -1323,6 +1325,7 @@ public class SystemBundleTests extends AbstractBundleTests {
 		}
 		assertEquals("Wrong state for SystemBundle", Bundle.RESOLVED, equinox2.getState()); //$NON-NLS-1$
 		handlerReg.unregister();
+		System.getProperties().remove("test.url");
 	}
 
 	public void testUUID() {
@@ -1717,8 +1720,8 @@ public class SystemBundleTests extends AbstractBundleTests {
 		test1 = systemContext.getBundle(testID1);
 		test2 = systemContext.getBundle(testID2);
 
-		BundleRevision rev1 = (BundleRevision) test1.adapt(BundleRevision.class);
-		BundleRevision rev2 = (BundleRevision) test2.adapt(BundleRevision.class);
+		BundleRevision rev1 = test1.adapt(BundleRevision.class);
+		BundleRevision rev2 = test2.adapt(BundleRevision.class);
 		BundleWiring wiring1 = rev1.getWiring();
 		BundleWiring wiring2 = rev2.getWiring();
 
@@ -1924,7 +1927,16 @@ public class SystemBundleTests extends AbstractBundleTests {
 		} finally {
 			Thread.currentThread().setContextClassLoader(current);
 		}
-
+		try {
+			equinox.stop();
+		} catch (BundleException e) {
+			fail("Unexpected error stopping framework", e); //$NON-NLS-1$
+		}
+		try {
+			equinox.waitForStop(10000);
+		} catch (InterruptedException e) {
+			fail("Unexpected interrupted exception", e); //$NON-NLS-1$
+		}
 	}
 
 	private void checkActive(Bundle b) {
@@ -2259,7 +2271,7 @@ public class SystemBundleTests extends AbstractBundleTests {
 				EquinoxLocations.PROP_CONFIG_AREA, //
 				EquinoxLocations.PROP_INSTALL_AREA, //
 				EclipseStarter.PROP_LOGFILE //
-				);
+		);
 		Properties systemProperties = (Properties) System.getProperties().clone();
 		Map<String, Object> configuration = new HashMap<String, Object>();
 		for (Object key : systemProperties.keySet()) {
@@ -2387,6 +2399,150 @@ public class SystemBundleTests extends AbstractBundleTests {
 			// expected
 		}
 		equinox.stop();
+	}
+
+	public void testBootDelegationConfigIni() throws BundleException, IOException, InterruptedException {
+		String compatBootDelegate = "osgi.compatibility.bootdelegation";
+		File config = OSGiTestsActivator.getContext().getDataFile(getName());
+		config.mkdirs();
+		Properties configIni = new Properties();
+		// use config.ini to override the default for the embedded case.
+		// note that the embedded case the default for this setting is false
+		configIni.setProperty(compatBootDelegate, "true");
+		configIni.store(new FileWriter(new File(config, "config.ini")), null);
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		Equinox equinox = new Equinox(configuration);
+		equinox.start();
+		BundleContext systemContext = equinox.getBundleContext();
+		assertEquals("Wrong value for: " + compatBootDelegate, "true", systemContext.getProperty(compatBootDelegate));
+
+		File bundleFile = null;
+		try {
+			File baseDir = new File(config, "bundles");
+			baseDir.mkdirs();
+			bundleFile = createBundle(baseDir, getName(), true, true);
+		} catch (IOException e) {
+			fail("Unexpected error creating bundles.", e);
+		}
+		Bundle b = null;
+		try {
+			b = systemContext.installBundle("reference:file:///" + bundleFile.getAbsolutePath()); //$NON-NLS-1$
+		} catch (BundleException e) {
+			fail("Unexpected install error", e); //$NON-NLS-1$
+		}
+		try {
+			b.loadClass(SocketFactory.class.getName());
+		} catch (ClassNotFoundException e) {
+			fail("Expected to be able to load the class from boot.", e);
+		}
+		long bId = b.getBundleId();
+		equinox.stop();
+		equinox.waitForStop(5000);
+
+		// remove the setting to ensure false is used for the embedded case
+		configIni.remove(compatBootDelegate);
+		configIni.store(new FileWriter(new File(config, "config.ini")), null);
+		equinox = new Equinox(configuration);
+		equinox.start();
+
+		systemContext = equinox.getBundleContext();
+		b = systemContext.getBundle(bId);
+		try {
+			b.loadClass(SocketFactory.class.getName());
+			fail("Expected to fail to load the class from boot.");
+		} catch (ClassNotFoundException e) {
+			// expected
+		}
+		equinox.stop();
+	}
+
+	public void testSystemBundleListener() throws BundleException, InterruptedException {
+		File config = OSGiTestsActivator.getContext().getDataFile(getName());
+		config.mkdirs();
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		Equinox equinox = new Equinox(configuration);
+		equinox.start();
+		BundleContext systemContext = equinox.getBundleContext();
+
+		final AtomicInteger stoppingEvent = new AtomicInteger();
+		final AtomicInteger stoppedEvent = new AtomicInteger();
+
+		BundleListener systemBundleListener = new SynchronousBundleListener() {
+
+			@Override
+			public void bundleChanged(BundleEvent event) {
+				if (event.getBundle().getBundleId() == 0) {
+					switch (event.getType()) {
+						case BundleEvent.STOPPING :
+							stoppingEvent.incrementAndGet();
+							break;
+						case BundleEvent.STOPPED :
+							stoppedEvent.incrementAndGet();
+						default :
+							break;
+					}
+				}
+			}
+		};
+		systemContext.addBundleListener(systemBundleListener);
+
+		equinox.stop();
+		equinox.waitForStop(5000);
+		assertEquals("Wrong number of STOPPING events", 1, stoppingEvent.get());
+		assertEquals("Wrong number of STOPPED events", 1, stoppedEvent.get());
+	}
+
+	public void testContextBootDelegation() throws BundleException {
+		File config = OSGiTestsActivator.getContext().getDataFile(getName());
+		config.mkdirs();
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		Equinox equinox = new Equinox(configuration);
+
+		equinox.start();
+		BundleContext systemContext = equinox.getBundleContext();
+		try {
+			Bundle b = systemContext.installBundle(installer.getBundleLocation("test.bug471551"));
+			b.start();
+		} catch (BundleException e) {
+			fail("Unexpected error", e); //$NON-NLS-1$
+		}
+
+		equinox.stop();
+	}
+
+	public void testExtraSystemBundleHeaders() throws BundleException, InterruptedException {
+		File config = OSGiTestsActivator.getContext().getDataFile(getName());
+		config.mkdirs();
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		configuration.put(Constants.FRAMEWORK_SYSTEMCAPABILITIES_EXTRA, "something.extra; attr1=value2");
+		configuration.put(Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA, "some.extra.pkg");
+
+		Equinox equinox = new Equinox(configuration);
+		equinox.start();
+		Dictionary<String, String> headers = equinox.getHeaders();
+		String provideCapability = headers.get(Constants.PROVIDE_CAPABILITY);
+		String exportPackage = headers.get(Constants.EXPORT_PACKAGE);
+		assertTrue("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.extra"));
+		assertTrue("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("some.extra.pkg"));
+		equinox.stop();
+
+		equinox.waitForStop(5000);
+
+		configuration.put(EquinoxConfiguration.PROP_SYSTEM_ORIGINAL_HEADERS, "true");
+		equinox = new Equinox(configuration);
+		equinox.start();
+		headers = equinox.getHeaders();
+		provideCapability = headers.get(Constants.PROVIDE_CAPABILITY);
+		exportPackage = headers.get(Constants.EXPORT_PACKAGE);
+		assertFalse("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.extra"));
+		assertFalse("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("some.extra.pkg"));
+		equinox.stop();
+
+		equinox.waitForStop(5000);
 	}
 
 	private static File[] createBundles(File outputDir, int bundleCount) throws IOException {

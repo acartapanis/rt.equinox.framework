@@ -14,12 +14,12 @@
   <parent>
     <artifactId>rt.equinox.framework</artifactId>
     <groupId>org.eclipse.equinox.framework</groupId>
-    <version>4.5.0-SNAPSHOT</version>
+    <version>4.6.0-SNAPSHOT</version>
     <relativePath>../../</relativePath>
   </parent>
   <groupId>org.eclipse.equinox.feature</groupId>
   <artifactId>org.eclipse.equinox.executable</artifactId>
-  <version>3.6.100-SNAPSHOT</version>
+  <version>3.6.200-SNAPSHOT</version>
   <packaging>eclipse-feature</packaging>
 
   <build>
@@ -123,6 +123,18 @@
                   <goal>run</goal>
                 </goals>
               </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/gtk/" target="clean"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
             </executions>
           </plugin>
         </plugins>
@@ -147,6 +159,18 @@
                 <configuration>
                   <target>
                     <ant antfile="build.xml" dir="library/gtk/" target="build_eclipse"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/gtk/" target="clean"/>
                   </target>
                 </configuration>
                 <goals>
@@ -183,6 +207,102 @@
                   <goal>run</goal>
                 </goals>
               </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/gtk/" target="clean"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
+      <id>build-native-launchers-gtk.linux.arm</id>
+      <activation>
+        <property>
+          <name>native</name>
+          <value>gtk.linux.arm</value>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>compile-executable-natives</id>
+                <phase>generate-resources</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/gtk/" target="build_eclipse"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/gtk/" target="clean"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
+      <id>build-native-launchers-gtk.linux.aarch64</id>
+      <activation>
+        <property>
+          <name>native</name>
+          <value>gtk.linux.aarch64</value>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>compile-executable-natives</id>
+                <phase>generate-resources</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/gtk/" target="build_eclipse"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/gtk/" target="clean"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
             </executions>
           </plugin>
         </plugins>
@@ -207,6 +327,18 @@
                 <configuration>
                   <target>
                     <ant antfile="build.xml" dir="library/win32/" target="build_eclipse"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/win32/" target="clean"/>
                   </target>
                 </configuration>
                 <goals>
@@ -243,6 +375,18 @@
                   <goal>run</goal>
                 </goals>
               </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/win32/" target="clean"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
             </executions>
           </plugin>
         </plugins>
@@ -267,6 +411,18 @@
                 <configuration>
                   <target>
                     <ant antfile="build.xml" dir="library/carbon/" target="build_eclipse"/>
+                  </target>
+                </configuration>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>clean-executable-natives</id>
+                <phase>clean</phase>
+                <configuration>
+                  <target>
+                    <ant antfile="build.xml" dir="library/carbon/" target="clean"/>
                   </target>
                 </configuration>
                 <goals>
@@ -307,6 +463,8 @@
                         <include name="gtk/aix/ppc/**/*"/>
                         <include name="gtk/aix/ppc64/**/*"/>
                         <include name="gtk/hpux/ia64/**/*"/>
+                        <include name="gtk/linux/arm/**/*"/>
+                        <include name="gtk/linux/aarch64/**/*"/>
                         <include name="gtk/linux/ppc/**/*"/>
                         <include name="gtk/linux/ppc64/**/*"/>
                         <include name="gtk/linux/ppc64le/**/*"/>

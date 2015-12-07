@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013 IBM Corporation and others.
+ * Copyright (c) 2013, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -13,13 +13,12 @@ package org.eclipse.osgi.tests.container;
 import java.io.IOException;
 import java.net.URL;
 import java.util.*;
-import junit.framework.Assert;
 import org.eclipse.osgi.container.*;
 import org.eclipse.osgi.container.builders.OSGiManifestBuilderFactory;
+import org.eclipse.osgi.service.debug.DebugOptions;
 import org.eclipse.osgi.tests.container.dummys.*;
 import org.eclipse.osgi.util.ManifestElement;
-import org.junit.After;
-import org.junit.Before;
+import org.junit.*;
 import org.osgi.framework.*;
 import org.osgi.framework.hooks.resolver.ResolverHook;
 
@@ -48,6 +47,10 @@ public abstract class AbstractTest {
 
 	protected DummyContainerAdaptor createDummyAdaptor(ResolverHook hook) {
 		return new DummyContainerAdaptor(new DummyCollisionHook(false), Collections.<String, String> emptyMap(), new DummyResolverHookFactory(hook));
+	}
+
+	protected DummyContainerAdaptor createDummyAdaptor(DebugOptions debugOptions) {
+		return new DummyContainerAdaptor(new DummyCollisionHook(false), Collections.<String, String> emptyMap(), new DummyResolverHookFactory(), debugOptions);
 	}
 
 	protected Bundle getBundle() {

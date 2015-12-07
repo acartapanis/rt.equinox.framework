@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2014 IBM Corporation and others.
+ * Copyright (c) 2012, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -24,8 +24,12 @@ import org.eclipse.osgi.framework.log.FrameworkLogEntry;
 import org.eclipse.osgi.framework.util.*;
 import org.eclipse.osgi.internal.container.LockSet;
 import org.eclipse.osgi.internal.debug.Debug;
-import org.eclipse.osgi.internal.framework.*;
-import org.eclipse.osgi.internal.hookregistry.*;
+import org.eclipse.osgi.internal.framework.EquinoxConfiguration;
+import org.eclipse.osgi.internal.framework.EquinoxContainer;
+import org.eclipse.osgi.internal.framework.EquinoxContainerAdaptor;
+import org.eclipse.osgi.internal.framework.FilterImpl;
+import org.eclipse.osgi.internal.hookregistry.BundleFileWrapperFactoryHook;
+import org.eclipse.osgi.internal.hookregistry.StorageHookFactory;
 import org.eclipse.osgi.internal.hookregistry.StorageHookFactory.StorageHook;
 import org.eclipse.osgi.internal.location.EquinoxLocations;
 import org.eclipse.osgi.internal.location.LocationHelper;
@@ -38,6 +42,7 @@ import org.eclipse.osgi.storage.BundleInfo.Generation;
 import org.eclipse.osgi.storage.bundlefile.*;
 import org.eclipse.osgi.storage.url.reference.Handler;
 import org.eclipse.osgi.storage.url.reference.ReferenceInputStream;
+import org.eclipse.osgi.storagemanager.ManagedOutputStream;
 import org.eclipse.osgi.storagemanager.StorageManager;
 import org.eclipse.osgi.util.ManifestElement;
 import org.eclipse.osgi.util.NLS;
@@ -92,7 +97,7 @@ public class Storage {
 		return storage;
 	}
 
-	private Storage(EquinoxContainer container) throws IOException, BundleException {
+	private Storage(EquinoxContainer container) throws IOException {
 		mruList = new MRUBundleFileList(getBundleFileLimit(container.getConfiguration()));
 		equinoxContainer = container;
 		extensionInstaller = new FrameworkExtensionInstaller(container.getConfiguration());
@@ -228,14 +233,15 @@ public class Storage {
 			}
 		}
 		File content = generation.getContent();
+		if (getConfiguration().inCheckConfigurationMode()) {
+			if (generation.isDirectory()) {
+				content = new File(content, "META-INF/MANIFEST.MF"); //$NON-NLS-1$
+			}
+			return generation.getLastModified() != secureAction.lastModified(content);
+		}
 		if (!content.exists()) {
 			// the content got deleted since last time!
 			return true;
-		}
-		if (getConfiguration().inCheckConfigurationMode()) {
-			if (generation.isDirectory())
-				content = new File(content, "META-INF/MANIFEST.MF"); //$NON-NLS-1$
-			return generation.getLastModified() != secureAction.lastModified(content);
 		}
 		return false;
 	}
@@ -357,7 +363,7 @@ public class Storage {
 	}
 
 	private void cleanOSGiStorage(Location location, File root) {
-		if (location.isReadOnly() || !StorageUtil.rm(root, getConfiguration().getDebug().DEBUG_GENERAL)) {
+		if (location.isReadOnly() || !StorageUtil.rm(root, getConfiguration().getDebug().DEBUG_STORAGE)) {
 			equinoxContainer.getLogServices().log(EquinoxContainer.NAME, FrameworkLogEntry.ERROR, "The -clean (osgi.clean) option was not successful. Unable to clean the storage area: " + root.getAbsolutePath(), null); //$NON-NLS-1$
 		}
 	}
@@ -763,7 +769,7 @@ public class Storage {
 				throw new BundleException("Could not create generation directory: " + generationRoot.getAbsolutePath()); //$NON-NLS-1$
 			}
 			contentFile = new File(generationRoot, BUNDLE_FILE_NAME);
-			if (!staged.renameTo(contentFile)) {
+			if (!StorageUtil.move(staged, contentFile, getConfiguration().getDebug().DEBUG_STORAGE)) {
 				throw new BundleException("Error while renaming bundle file to final location: " + contentFile); //$NON-NLS-1$
 			}
 		} else {
@@ -940,7 +946,7 @@ public class Storage {
 	}
 
 	private void compact(File directory) {
-		if (getConfiguration().getDebug().DEBUG_GENERAL)
+		if (getConfiguration().getDebug().DEBUG_STORAGE)
 			Debug.println("compact(" + directory.getPath() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 		String list[] = directory.list();
 		if (list == null)
@@ -958,13 +964,13 @@ public class Storage {
 			// and the directory is marked for delete
 			if (delete.exists()) {
 				// if rm fails to delete the directory and .delete was removed
-				if (!StorageUtil.rm(target, getConfiguration().getDebug().DEBUG_GENERAL) && !delete.exists()) {
+				if (!StorageUtil.rm(target, getConfiguration().getDebug().DEBUG_STORAGE) && !delete.exists()) {
 					try {
 						// recreate .delete
 						FileOutputStream out = new FileOutputStream(delete);
 						out.close();
 					} catch (IOException e) {
-						if (getConfiguration().getDebug().DEBUG_GENERAL)
+						if (getConfiguration().getDebug().DEBUG_STORAGE)
 							Debug.println("Unable to write " + delete.getPath() + ": " + e.getMessage()); //$NON-NLS-1$ //$NON-NLS-2$
 					}
 				}
@@ -994,7 +1000,7 @@ public class Storage {
 	}
 
 	void delete0(File delete) throws IOException {
-		if (!StorageUtil.rm(delete, getConfiguration().getDebug().DEBUG_GENERAL)) {
+		if (!StorageUtil.rm(delete, getConfiguration().getDebug().DEBUG_STORAGE)) {
 			/* create .delete */
 			FileOutputStream out = new FileOutputStream(new File(delete, DELETE_FLAG));
 			out.close();
@@ -1025,20 +1031,29 @@ public class Storage {
 
 	void save0() throws IOException {
 		StorageManager childStorageManager = null;
+		ManagedOutputStream mos = null;
 		DataOutputStream out = null;
+		boolean success = false;
 		moduleDatabase.readLock();
 		try {
 			synchronized (this.saveMonitor) {
 				if (lastSavedTimestamp == moduleDatabase.getTimestamp())
 					return;
 				childStorageManager = getChildStorageManager();
-				out = new DataOutputStream(new BufferedOutputStream(childStorageManager.getOutputStream(FRAMEWORK_INFO)));
+				mos = childStorageManager.getOutputStream(FRAMEWORK_INFO);
+				out = new DataOutputStream(new BufferedOutputStream(mos));
 				saveGenerations(out);
 				savePermissionData(out);
 				moduleDatabase.store(out, true);
 				lastSavedTimestamp = moduleDatabase.getTimestamp();
+				success = true;
 			}
 		} finally {
+			if (!success) {
+				if (mos != null) {
+					mos.abort();
+				}
+			}
 			if (out != null) {
 				try {
 					out.close();
@@ -1748,7 +1763,7 @@ public class Storage {
 		try {
 			sManager.open(!isReadOnly());
 		} catch (IOException ex) {
-			if (getConfiguration().getDebug().DEBUG_GENERAL) {
+			if (getConfiguration().getDebug().DEBUG_STORAGE) {
 				Debug.println("Error reading framework.info: " + ex.getMessage()); //$NON-NLS-1$
 				Debug.printStackTrace(ex);
 			}
@@ -1768,7 +1783,7 @@ public class Storage {
 		try {
 			storageStream = storageManager.getInputStream(FRAMEWORK_INFO);
 		} catch (IOException ex) {
-			if (getConfiguration().getDebug().DEBUG_GENERAL) {
+			if (getConfiguration().getDebug().DEBUG_STORAGE) {
 				Debug.println("Error reading framework.info: " + ex.getMessage()); //$NON-NLS-1$
 				Debug.printStackTrace(ex);
 			}

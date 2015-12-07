@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013, 2014 IBM Corporation and others.
+ * Copyright (c) 2013, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -20,6 +20,7 @@ import org.eclipse.osgi.container.ModuleContainerAdaptor.ContainerEvent;
 import org.eclipse.osgi.container.ModuleContainerAdaptor.ModuleEvent;
 import org.eclipse.osgi.container.builders.OSGiManifestBuilderFactory;
 import org.eclipse.osgi.container.namespaces.EclipsePlatformNamespace;
+import org.eclipse.osgi.internal.debug.Debug;
 import org.eclipse.osgi.report.resolution.ResolutionReport;
 import org.eclipse.osgi.tests.container.dummys.*;
 import org.eclipse.osgi.tests.container.dummys.DummyModuleDatabase.DummyContainerEvent;
@@ -215,7 +216,28 @@ public class TestModuleContainer extends AbstractTest {
 		Module h1v2 = installDummyModule("h1_v2.MF", "h1_v2", container);
 		Module f1v1 = installDummyModule("f1_v1.MF", "f1_v1", container);
 		Module b3 = installDummyModule("b3_v1.MF", "b3_v1", container);
-		container.resolve(Arrays.asList(h1v1, h1v2, f1v1, b3), true);
+		ResolutionReport report = container.resolve(Arrays.asList(h1v1, h1v2, f1v1, b3), true);
+		Assert.assertNull("Expected no resolution exception.", report.getResolutionException());
+	}
+
+	@Test
+	public void testMissingHost() throws BundleException, IOException {
+		DummyContainerAdaptor adaptor = createDummyAdaptor();
+		ModuleContainer container = adaptor.getContainer();
+		installDummyModule("system.bundle.MF", Constants.SYSTEM_BUNDLE_LOCATION, container);
+		Module f1v1 = installDummyModule("f1_v1.MF", "f1_v1", container);
+		Module b3 = installDummyModule("b3_v1.MF", "b3_v1", container);
+		ResolutionReport report = container.resolve(Arrays.asList(f1v1, b3), true);
+		Assert.assertNotNull("Expected a resolution exception.", report.getResolutionException());
+
+		Module h1v1 = installDummyModule("h1_v1.MF", "h1_v1", container);
+		report = container.resolve(Arrays.asList(b3), true);
+		Assert.assertNull("Expected no resolution exception.", report.getResolutionException());
+		ModuleWiring wiring = b3.getCurrentRevision().getWiring();
+		List<ModuleWire> packageWires = wiring.getRequiredModuleWires(PackageNamespace.PACKAGE_NAMESPACE);
+		Assert.assertEquals("Expected 1 import.", 1, packageWires.size());
+		ModuleWire pkgWire = packageWires.get(0);
+		Assert.assertEquals("Wrong host exporter.", pkgWire.getProviderWiring().getRevision(), h1v1.getCurrentRevision());
 	}
 
 	@Test
@@ -618,8 +640,8 @@ public class TestModuleContainer extends AbstractTest {
 
 		container.refresh(Arrays.asList(systemBundle));
 		List<DummyModuleEvent> actual = database.getModuleEvents();
-		List<DummyModuleEvent> expected = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(systemBundle, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c1, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c2, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c3, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c5, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c7, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(systemBundle, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c1, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c2,
-				ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c3, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.RESOLVED, State.RESOLVED)));
+		List<DummyModuleEvent> expected = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(systemBundle, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c1, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c2, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c3, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c5, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c7, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(systemBundle, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c1, ModuleEvent.RESOLVED, State.RESOLVED),
+				new DummyModuleEvent(c2, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c3, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.RESOLVED, State.RESOLVED)));
 		assertEvents(expected, actual, false);
 	}
 
@@ -675,8 +697,8 @@ public class TestModuleContainer extends AbstractTest {
 		database.getModuleEvents();
 		container.refresh(Arrays.asList(c4));
 		List<DummyModuleEvent> actual = database.getModuleEvents();
-		List<DummyModuleEvent> expected = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(c7, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c7, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c5, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c7, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.STARTING,
-				State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTED, State.ACTIVE)));
+		List<DummyModuleEvent> expected = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(c7, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c7, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c5, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c7, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.RESOLVED, State.RESOLVED),
+				new DummyModuleEvent(c7, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTED, State.ACTIVE)));
 		assertEvents(expected, actual, false);
 	}
 
@@ -734,11 +756,11 @@ public class TestModuleContainer extends AbstractTest {
 		List<DummyModuleEvent> actual = database.getModuleEvents();
 		List<DummyModuleEvent> expected = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.UPDATED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED),
 
-		new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UPDATED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED),
+				new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UPDATED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED),
 
-		new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.UPDATED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UPDATED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED),
+				new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.UPDATED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UPDATED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED),
 
-		new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c7, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.RESOLVED, State.RESOLVED)));
+				new DummyModuleEvent(c4, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c6, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c7, ModuleEvent.UNRESOLVED, State.INSTALLED), new DummyModuleEvent(c4, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.RESOLVED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.RESOLVED, State.RESOLVED)));
 		assertEvents(expected, actual, false);
 
 		// uninstall c4
@@ -1165,16 +1187,16 @@ public class TestModuleContainer extends AbstractTest {
 
 			container.getFrameworkStartLevel().setStartLevel(100);
 			actualModuleEvents = database.getModuleEvents(14);
-			expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(c7, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c6, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c6, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c5, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c5, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c4, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c4, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c3, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c3, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c2, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c2,
-					ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c1, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c1, ModuleEvent.STARTED, State.ACTIVE)));
+			expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(c7, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c6, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c6, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c5, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c5, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c4, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c4, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c3, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c3, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c2, ModuleEvent.STARTING, State.STARTING),
+					new DummyModuleEvent(c2, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c1, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c1, ModuleEvent.STARTED, State.ACTIVE)));
 
 			actualContainerEvents = database.getContainerEvents(1);
 			expectedContainerEvents = new ArrayList<DummyContainerEvent>(Arrays.asList(new DummyContainerEvent(ContainerEvent.START_LEVEL, systemBundle, null)));
 			Assert.assertEquals("Wrong container events.", expectedContainerEvents, actualContainerEvents);
 		} else {
 			actualModuleEvents = database.getModuleEvents(16);
-			List<DummyModuleEvent> expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(systemBundle, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c6, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c6, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c5, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c5, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c4, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c4, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c3, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c3, ModuleEvent.STARTED,
-					State.ACTIVE), new DummyModuleEvent(c2, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c2, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c1, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c1, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(systemBundle, ModuleEvent.STARTED, State.ACTIVE)));
+			List<DummyModuleEvent> expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(systemBundle, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c7, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c6, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c6, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c5, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c5, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c4, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c4, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c3, ModuleEvent.STARTING, State.STARTING),
+					new DummyModuleEvent(c3, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c2, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c2, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(c1, ModuleEvent.STARTING, State.STARTING), new DummyModuleEvent(c1, ModuleEvent.STARTED, State.ACTIVE), new DummyModuleEvent(systemBundle, ModuleEvent.STARTED, State.ACTIVE)));
 			assertEvents(expectedModuleEvents, actualModuleEvents, true);
 
 			List<DummyContainerEvent> actualContainerEvents = database.getContainerEvents();
@@ -1185,8 +1207,8 @@ public class TestModuleContainer extends AbstractTest {
 		if (beginningStartLevel == 1) {
 			container.getFrameworkStartLevel().setStartLevel(1);
 			actualModuleEvents = database.getModuleEvents(14);
-			List<DummyModuleEvent> expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(c1, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c1, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c2, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c2, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c3, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c3, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c4, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c5, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.STOPPING,
-					State.STOPPING), new DummyModuleEvent(c6, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c7, ModuleEvent.STOPPED, State.RESOLVED)));
+			List<DummyModuleEvent> expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(c1, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c1, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c2, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c2, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c3, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c3, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c4, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c5, ModuleEvent.STOPPED, State.RESOLVED),
+					new DummyModuleEvent(c6, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c6, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c7, ModuleEvent.STOPPED, State.RESOLVED)));
 			assertEvents(expectedModuleEvents, actualModuleEvents, true);
 
 			List<DummyContainerEvent> actualContainerEvents = database.getContainerEvents(1);
@@ -1202,8 +1224,8 @@ public class TestModuleContainer extends AbstractTest {
 			assertEvents(expectedModuleEvents, actualModuleEvents, true);
 		} else {
 			actualModuleEvents = database.getModuleEvents(16);
-			List<DummyModuleEvent> expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(systemBundle, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c1, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c1, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c2, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c2, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c3, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c3, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c4, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c5, ModuleEvent.STOPPED,
-					State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c6, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c7, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(systemBundle, ModuleEvent.STOPPED, State.RESOLVED)));
+			List<DummyModuleEvent> expectedModuleEvents = new ArrayList<DummyModuleEvent>(Arrays.asList(new DummyModuleEvent(systemBundle, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c1, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c1, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c2, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c2, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c3, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c3, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c4, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c4, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c5, ModuleEvent.STOPPING, State.STOPPING),
+					new DummyModuleEvent(c5, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c6, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c6, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(c7, ModuleEvent.STOPPING, State.STOPPING), new DummyModuleEvent(c7, ModuleEvent.STOPPED, State.RESOLVED), new DummyModuleEvent(systemBundle, ModuleEvent.STOPPED, State.RESOLVED)));
 			assertEvents(expectedModuleEvents, actualModuleEvents, true);
 		}
 		List<DummyContainerEvent> actualContainerEvents = database.getContainerEvents();
@@ -1228,15 +1250,17 @@ public class TestModuleContainer extends AbstractTest {
 		ModuleWire dynamicWire = container.resolveDynamic("org.osgi.framework", dynamic1.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "org.osgi.framework", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", systemBundle.getCurrentRevision(), dynamicWire.getProvider());
 
 		dynamicWire = container.resolveDynamic("org.osgi.framework.wiring", dynamic1.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "org.osgi.framework.wiring", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", systemBundle.getCurrentRevision(), dynamicWire.getProvider());
 
 		dynamicWire = container.resolveDynamic("c1.b", dynamic1.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "c1.b", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
-
+		Assert.assertEquals("Wrong provider for the wire found.", c1.getCurrentRevision(), dynamicWire.getProvider());
 	}
 
 	@Test
@@ -1258,14 +1282,17 @@ public class TestModuleContainer extends AbstractTest {
 		ModuleWire dynamicWire = container.resolveDynamic("c1.b", dynamic1.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "c1.b", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", c1.getCurrentRevision(), dynamicWire.getProvider());
 
 		dynamicWire = container.resolveDynamic("c4.a", dynamic1.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "c4.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", c4.getCurrentRevision(), dynamicWire.getProvider());
 
 		dynamicWire = container.resolveDynamic("c4.b", dynamic1.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "c4.b", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", c4.getCurrentRevision(), dynamicWire.getProvider());
 	}
 
 	@Test
@@ -1290,6 +1317,7 @@ public class TestModuleContainer extends AbstractTest {
 		dynamicWire = container.resolveDynamic("c1.a", dynamic3.getCurrentRevision());
 		Assert.assertNotNull("Dynamic wire not found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "c1.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", c1v1.getCurrentRevision(), dynamicWire.getProvider());
 
 		ModuleWiring c1v1Wiring = c1v1.getCurrentRevision().getWiring();
 		Assert.assertNotNull("c1 wiring is null.", c1v1Wiring);
@@ -1327,10 +1355,12 @@ public class TestModuleContainer extends AbstractTest {
 		dynamicWire = container.resolveDynamic("h1.a", dynamic3.getCurrentRevision());
 		Assert.assertNotNull("Dynamic wire not found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "h1.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", h1.getCurrentRevision(), dynamicWire.getProvider());
 
 		dynamicWire = container.resolveDynamic("f1.a", dynamic3.getCurrentRevision());
 		Assert.assertNotNull("Dynamic wire not found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "f1.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", h1.getCurrentRevision(), dynamicWire.getProvider());
 
 		ModuleWiring h1Wiring = h1.getCurrentRevision().getWiring();
 		Assert.assertNotNull("h1 wiring is null.", h1Wiring);
@@ -1358,10 +1388,12 @@ public class TestModuleContainer extends AbstractTest {
 		ModuleWire dynamicWire = container.resolveDynamic("c4.a", dynamic3.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "c4.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", c4.getCurrentRevision(), dynamicWire.getProvider());
 
 		dynamicWire = container.resolveDynamic("c4.b", dynamic3.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "c4.b", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", c4.getCurrentRevision(), dynamicWire.getProvider());
 	}
 
 	@Test
@@ -1378,7 +1410,8 @@ public class TestModuleContainer extends AbstractTest {
 
 		Module f1 = installDummyModule("f1_v1.MF", "f1_v1", container);
 
-		ModuleWire dynamicWire = container.resolveDynamic("h1.a", dynamic3.getCurrentRevision());
+		ModuleWire dynamicWire;
+		dynamicWire = container.resolveDynamic("h1.a", dynamic3.getCurrentRevision());
 		Assert.assertNull("Dynamic wire found.", dynamicWire);
 		dynamicWire = container.resolveDynamic("f1.a", dynamic3.getCurrentRevision());
 		Assert.assertNull("Dynamic wire found.", dynamicWire);
@@ -1388,12 +1421,65 @@ public class TestModuleContainer extends AbstractTest {
 		dynamicWire = container.resolveDynamic("h1.a", dynamic3.getCurrentRevision());
 		Assert.assertNotNull("Dynamic wire not found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "h1.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong host revision found.", h1.getCurrentRevision(), dynamicWire.getProvider());
 
 		dynamicWire = container.resolveDynamic("f1.a", dynamic3.getCurrentRevision());
 		Assert.assertNotNull("Dynamic wire not found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "f1.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong host revision found.", h1.getCurrentRevision(), dynamicWire.getProvider());
 
 		ModuleWiring h1Wiring = h1.getCurrentRevision().getWiring();
+		Assert.assertNotNull("h1 wiring is null.", h1Wiring);
+
+		ModuleWiring f1Wiring = f1.getCurrentRevision().getWiring();
+		Assert.assertNotNull("f1 wiring is null.", f1Wiring);
+	}
+
+	@Test
+	public void testDynamicImport07() throws BundleException, IOException {
+		DummyContainerAdaptor adaptor = createDummyAdaptor();
+		ModuleContainer container = adaptor.getContainer();
+		Module systemBundle = installDummyModule("system.bundle.MF", Constants.SYSTEM_BUNDLE_LOCATION, container);
+
+		container.resolve(Arrays.asList(systemBundle), true);
+
+		Module dynamic3 = installDummyModule("dynamic2_v1.MF", "dynamic2_v1", container);
+
+		Assert.assertNull("Expected no resolution exception.", container.resolve(Arrays.asList(systemBundle, dynamic3), true).getResolutionException());
+
+		installDummyModule("c6_v1.MF", "c6_v1", container);
+
+		ModuleWire dynamicWire = container.resolveDynamic("c6", dynamic3.getCurrentRevision());
+		Assert.assertNull("Dynamic wire found.", dynamicWire);
+	}
+
+	@Test
+	public void testDynamicImport08() throws BundleException, IOException {
+		DummyContainerAdaptor adaptor = createDummyAdaptor();
+		ModuleContainer container = adaptor.getContainer();
+		DummyModuleDatabase database = adaptor.getDatabase();
+		Module systemBundle = installDummyModule("system.bundle.MF", Constants.SYSTEM_BUNDLE_LOCATION, container);
+
+		container.resolve(Arrays.asList(systemBundle), true);
+
+		Module dynamic2 = installDummyModule("dynamic2_v1.MF", "dynamic2_v1", container);
+
+		container.resolve(Arrays.asList(systemBundle, dynamic2), true);
+
+		Module h1 = installDummyModule("h1_v1.MF", "h1_v1", container);
+		Module f1 = installDummyModule("f1_v1.MF", "f1_v1", container);
+		database.getModuleEvents();
+		// make sure h1 is not resolved
+		ModuleWiring h1Wiring = h1.getCurrentRevision().getWiring();
+		Assert.assertNull("h1 got resolved somehow.", h1Wiring);
+		// do not resolve the host first; make sure it gets pulled in while attempting to resolve 
+		// to a fragment capability.
+		ModuleWire dynamicWire = container.resolveDynamic("f1.a", dynamic2.getCurrentRevision());
+		Assert.assertNotNull("Dynamic wire not found.", dynamicWire);
+		Assert.assertEquals("Wrong package found.", "f1.a", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", h1.getCurrentRevision(), dynamicWire.getProvider());
+
+		h1Wiring = h1.getCurrentRevision().getWiring();
 		Assert.assertNotNull("h1 wiring is null.", h1Wiring);
 
 		ModuleWiring f1Wiring = f1.getCurrentRevision().getWiring();
@@ -1419,6 +1505,7 @@ public class TestModuleContainer extends AbstractTest {
 		ModuleWire dynamicWire = container.resolveDynamic("org.osgi.framework", dynamic1.getCurrentRevision());
 		Assert.assertNotNull("No dynamic wire found.", dynamicWire);
 		Assert.assertEquals("Wrong package found.", "org.osgi.framework", dynamicWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+		Assert.assertEquals("Wrong provider for the wire found.", systemBundle.getCurrentRevision(), dynamicWire.getProvider());
 
 		Assert.assertEquals("Wrong number of reports.", 1, hook.getResolutionReports().size());
 		hook.getResolutionReports().clear();
@@ -1472,6 +1559,42 @@ public class TestModuleContainer extends AbstractTest {
 		Assert.assertEquals("a should resolve.", State.RESOLVED, uses_a.getState());
 		Assert.assertEquals("b should resolve.", State.RESOLVED, uses_b.getState());
 		Assert.assertEquals("c should not resolve.", State.INSTALLED, uses_c.getState());
+	}
+
+	@Test
+	public void testUses1Dynamic() throws BundleException, IOException {
+		DummyContainerAdaptor adaptor = createDummyAdaptor(new DummyDebugOptions(Collections.singletonMap("org.eclipse.osgi/resolver/report", "true")));
+		ModuleContainer container = adaptor.getContainer();
+
+		Module systemBundle = installDummyModule("system.bundle.MF", Constants.SYSTEM_BUNDLE_LOCATION, container);
+
+		container.resolve(Arrays.asList(systemBundle), true);
+		Module uses_a = installDummyModule("uses.a.MF", "a", container);
+		Module uses_b = installDummyModule("uses.b.MF", "b", container);
+		Module uses_c_dynamic = installDummyModule("uses.c.dynamic.MF", "c", container);
+
+		container.resolve(null, false);
+
+		Assert.assertEquals("a should resolve.", State.RESOLVED, uses_a.getState());
+		Assert.assertEquals("b should resolve.", State.RESOLVED, uses_b.getState());
+		Assert.assertEquals("c should resolve.", State.RESOLVED, uses_c_dynamic.getState());
+
+		ModuleWire dynamicWire = container.resolveDynamic("uses1", uses_c_dynamic.getCurrentRevision());
+		Assert.assertNotNull("No dynamic wire.", dynamicWire);
+
+		PrintStream originalOut = Debug.out;
+		ByteArrayOutputStream bytesOut = new ByteArrayOutputStream();
+		PrintStream testOut = new PrintStream(bytesOut);
+		Debug.out = testOut;
+		try {
+			dynamicWire = container.resolveDynamic("uses2", uses_c_dynamic.getCurrentRevision());
+			Assert.assertNull("Dynamic wire found.", dynamicWire);
+		} finally {
+			Debug.out = originalOut;
+			testOut.close();
+		}
+		String traceOutput = bytesOut.toString();
+		Assert.assertTrue("Wrong traceOutput: " + traceOutput, traceOutput.startsWith("org.osgi.service.resolver.ResolutionException"));
 	}
 
 	/*
@@ -1554,6 +1677,12 @@ public class TestModuleContainer extends AbstractTest {
 		for (BundleWire wire : requiredWires) {
 			Assert.assertEquals("Wrong provider", uses_i.getCurrentRevision(), wire.getProvider());
 		}
+
+		Module uses_j_dynamic = installDummyModule("uses.j.dynamic.MF", "j.dynamic", container);
+		container.resolve(null, false);
+		ModuleWire dynamicWire = container.resolveDynamic("uses2", uses_j_dynamic.getCurrentRevision());
+		Assert.assertNotNull("Null dynamic wire.", dynamicWire);
+		Assert.assertEquals("Wrong provider", uses_i.getCurrentRevision(), dynamicWire.getProvider());
 	}
 
 	/**
@@ -1594,6 +1723,28 @@ public class TestModuleContainer extends AbstractTest {
 		Assert.assertEquals("l should resolve.", State.RESOLVED, uses_l.getState());
 		Assert.assertEquals("m.conflict1 should resolve.", State.RESOLVED, uses_m_conflict1.getState());
 		Assert.assertEquals("m.conflict2 should resolve.", State.RESOLVED, uses_m_conflict2.getState());
+	}
+
+	@Test
+	public void testUses6FragConflicts() throws BundleException, IOException {
+		DummyContainerAdaptor adaptor = createDummyAdaptor();
+		ModuleContainer container = adaptor.getContainer();
+
+		Module systemBundle = installDummyModule("system.bundle.MF", Constants.SYSTEM_BUNDLE_LOCATION, container);
+
+		container.resolve(Arrays.asList(systemBundle), true);
+		Module uses_n1 = installDummyModule("uses.n1.MF", "n1", container);
+		installDummyModule("uses.n2.MF", "n2", container);
+		Module uses_n2_frag = installDummyModule("uses.n2.frag.MF", "n2.frag", container);
+		Module uses_n3 = installDummyModule("uses.n3.MF", "n3", container);
+		ResolutionReport report = container.resolve(null, false);
+		Assert.assertNull("resolution report has a resolution exception.", report.getResolutionException());
+
+		Assert.assertEquals("n1 should resolve.", State.RESOLVED, uses_n1.getState());
+		// TODO The following should be true, but on the current resolver in Mars the host is thrown away also
+		//Assert.assertEquals("n2 should resolve.", State.RESOLVED, uses_n2.getState());
+		Assert.assertEquals("n2.frag should not resolve.", State.INSTALLED, uses_n2_frag.getState());
+		Assert.assertEquals("n3 should resolve.", State.RESOLVED, uses_n3.getState());
 	}
 
 	@Test
@@ -1808,10 +1959,10 @@ public class TestModuleContainer extends AbstractTest {
 		Module c = installDummyModule("bug457118.c.MF", "c", container);
 		Module d = installDummyModule("bug457118.d.MF", "d", container);
 
-		Module a2 = installDummyModule("bug457118.a2.MF", "a2", container);
-		Module b2 = installDummyModule("bug457118.b2.MF", "b2", container);
-		Module c2 = installDummyModule("bug457118.c2.MF", "c2", container);
-		Module d2 = installDummyModule("bug457118.d2.MF", "d2", container);
+		installDummyModule("bug457118.a2.MF", "a2", container);
+		installDummyModule("bug457118.b2.MF", "b2", container);
+		installDummyModule("bug457118.c2.MF", "c2", container);
+		installDummyModule("bug457118.d2.MF", "d2", container);
 
 		container.resolve(null, true);
 
@@ -1824,6 +1975,16 @@ public class TestModuleContainer extends AbstractTest {
 		List<ModuleWire> bundleWires = e.getCurrentRevision().getWiring().getRequiredModuleWires(BundleNamespace.BUNDLE_NAMESPACE);
 		Assert.assertEquals("Wrong number of bundle wires: " + bundleWires, 1, bundleWires.size());
 		Assert.assertEquals("Wrong bundle provider", a.getCurrentRevision(), bundleWires.get(0).getProvider());
+	}
+
+	@Test
+	public void testBadNativeCode() throws IOException {
+		try {
+			OSGiManifestBuilderFactory.createBuilder(getManifest("bad.native.code.MF"));
+		} catch (BundleException e) {
+			Assert.assertEquals("Wrong exception type.", BundleException.MANIFEST_ERROR, e.getType());
+		}
+
 	}
 
 	private static void assertWires(List<ModuleWire> required, List<ModuleWire>... provided) {

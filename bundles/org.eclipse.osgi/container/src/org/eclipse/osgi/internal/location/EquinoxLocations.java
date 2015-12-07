@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2004, 2012 IBM Corporation and others.
+ * Copyright (c) 2004, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -7,6 +7,7 @@
  * 
  * Contributors:
  *     IBM Corporation - initial API and implementation
+ *     Rapicorp, Inc - Support for Mac Layout (bug 431116)
  *******************************************************************************/
 package org.eclipse.osgi.internal.location;
 
@@ -14,7 +15,10 @@ import java.io.*;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.eclipse.osgi.internal.framework.EquinoxConfiguration;
+import org.eclipse.osgi.internal.framework.EquinoxConfiguration.ConfigValues;
+import org.eclipse.osgi.internal.framework.EquinoxContainer;
 import org.eclipse.osgi.service.datalocation.Location;
 import org.eclipse.osgi.storage.StorageUtil;
 import org.osgi.framework.Constants;
@@ -55,7 +59,9 @@ public class EquinoxLocations {
 
 	private static final String INSTANCE_DATA_AREA_PREFIX = ".metadata/.plugins/"; //$NON-NLS-1$
 
-	private final EquinoxConfiguration equinoxConfig;
+	private final ConfigValues equinoxConfig;
+	private final EquinoxContainer container;
+	private final AtomicBoolean debugLocations;
 
 	private final Location installLocation;
 	private final Location configurationLocation;
@@ -63,8 +69,10 @@ public class EquinoxLocations {
 	private final Location instanceLocation;
 	private final Location eclipseHomeLocation;
 
-	public EquinoxLocations(EquinoxConfiguration equinoxConfig) {
+	public EquinoxLocations(ConfigValues equinoxConfig, EquinoxContainer container, AtomicBoolean debugLocations) {
 		this.equinoxConfig = equinoxConfig;
+		this.container = container;
+		this.debugLocations = debugLocations;
 
 		// Initializes the Location objects for the LocationManager.
 		// set the osgi storage area if it exists
@@ -101,7 +109,7 @@ public class EquinoxLocations {
 		// cascaded.
 		URL parentLocation = computeSharedConfigurationLocation();
 		if (parentLocation != null && !parentLocation.equals(configurationLocation.getURL())) {
-			Location parent = new BasicLocation(null, parentLocation, true, null, equinoxConfig);
+			Location parent = new BasicLocation(null, parentLocation, true, null, equinoxConfig, container, debugLocations);
 			((BasicLocation) configurationLocation).setParent(parent);
 		}
 
@@ -141,7 +149,7 @@ public class EquinoxLocations {
 		}
 	}
 
-	private static String getEclipseHomeLocation(String launcher, EquinoxConfiguration equinoxConfig) {
+	private static String getEclipseHomeLocation(String launcher, ConfigValues configValues) {
 		if (launcher == null)
 			return null;
 		File launcherFile = new File(launcher);
@@ -150,22 +158,15 @@ public class EquinoxLocations {
 		File launcherDir = new File(launcherFile.getParent());
 		// check for mac os; the os check is copied from EclipseEnvironmentInfo.
 		String macosx = org.eclipse.osgi.service.environment.Constants.OS_MACOSX;
-		if (macosx.equals(equinoxConfig.getOS()))
-			launcherDir = getMacOSEclipsoeHomeLocation(launcherDir);
+		if (macosx.equals(configValues.getConfiguration(EquinoxConfiguration.PROP_OSGI_OS)))
+			launcherDir = getMacOSEclipseHomeLocation(launcherDir);
 		return (launcherDir.exists() && launcherDir.isDirectory()) ? launcherDir.getAbsolutePath() : null;
 	}
 
-	private static File getMacOSEclipsoeHomeLocation(File launcherDir) {
-		// TODO for now we go up three directories from the launcher dir as long as the parent dir is named MacOS; is this always the case?
-		// TODO not sure if case is important
+	private static File getMacOSEclipseHomeLocation(File launcherDir) {
 		if (!launcherDir.getName().equalsIgnoreCase("macos")) //$NON-NLS-1$
 			return launcherDir; // don't do the up three stuff if not in macos directory
-		String launcherParent = launcherDir.getParent();
-		if (launcherParent != null)
-			launcherParent = new File(launcherParent).getParent();
-		if (launcherParent != null)
-			launcherParent = new File(launcherParent).getParent();
-		return launcherParent == null ? null : new File(launcherParent);
+		return new File(launcherDir.getParent(), "Eclipse"); //$NON-NLS-1$
 	}
 
 	@SuppressWarnings("deprecation")
@@ -177,12 +178,12 @@ public class EquinoxLocations {
 		// if the instance location is not set, predict where the workspace will be and 
 		// put the instance area inside the workspace meta area.
 		if (location == null)
-			return new BasicLocation(property, defaultLocation, userReadOnlySetting != null || !computeReadOnly ? readOnly : !canWrite(defaultLocation), dataAreaPrefix, equinoxConfig);
+			return new BasicLocation(property, defaultLocation, userReadOnlySetting != null || !computeReadOnly ? readOnly : !canWrite(defaultLocation), dataAreaPrefix, equinoxConfig, container, debugLocations);
 		String trimmedLocation = location.trim();
 		if (trimmedLocation.equalsIgnoreCase(NONE))
 			return null;
 		if (trimmedLocation.equalsIgnoreCase(NO_DEFAULT))
-			return new BasicLocation(property, null, readOnly, dataAreaPrefix, equinoxConfig);
+			return new BasicLocation(property, null, readOnly, dataAreaPrefix, equinoxConfig, container, debugLocations);
 		if (trimmedLocation.startsWith(USER_HOME)) {
 			String base = substituteVar(location, USER_HOME, PROP_USER_HOME);
 			location = new File(base, userDefaultAppendage).getAbsolutePath();
@@ -199,7 +200,7 @@ public class EquinoxLocations {
 		URL url = buildURL(location, true);
 		BasicLocation result = null;
 		if (url != null) {
-			result = new BasicLocation(property, null, userReadOnlySetting != null || !computeReadOnly ? readOnly : !canWrite(url), dataAreaPrefix, equinoxConfig);
+			result = new BasicLocation(property, null, userReadOnlySetting != null || !computeReadOnly ? readOnly : !canWrite(url), dataAreaPrefix, equinoxConfig, container, debugLocations);
 			result.setURL(url, false);
 		}
 		return result;

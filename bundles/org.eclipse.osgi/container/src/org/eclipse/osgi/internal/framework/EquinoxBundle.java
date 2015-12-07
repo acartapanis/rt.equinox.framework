@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2014 IBM Corporation and others.
+ * Copyright (c) 2012, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -16,17 +16,10 @@ import java.security.*;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.util.*;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.eclipse.osgi.container.*;
-import org.eclipse.osgi.container.Module.Settings;
-import org.eclipse.osgi.container.Module.StartOptions;
-import org.eclipse.osgi.container.Module.State;
-import org.eclipse.osgi.container.Module.StopOptions;
+import org.eclipse.osgi.container.Module.*;
 import org.eclipse.osgi.container.ModuleContainerAdaptor.ContainerEvent;
 import org.eclipse.osgi.container.ModuleContainerAdaptor.ModuleEvent;
-import org.eclipse.osgi.framework.eventmgr.EventDispatcher;
-import org.eclipse.osgi.framework.eventmgr.ListenerQueue;
 import org.eclipse.osgi.framework.log.FrameworkLogEntry;
 import org.eclipse.osgi.internal.debug.Debug;
 import org.eclipse.osgi.internal.loader.BundleLoader;
@@ -67,10 +60,13 @@ public class EquinoxBundle implements Bundle, BundleReference {
 			public String get(Object key) {
 				if (!(key instanceof String))
 					return null;
-				if (org.osgi.framework.Constants.EXPORT_PACKAGE.equalsIgnoreCase((String) key)) {
-					return getExtra(org.osgi.framework.Constants.EXPORT_PACKAGE, org.osgi.framework.Constants.FRAMEWORK_SYSTEMPACKAGES, org.osgi.framework.Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA);
-				} else if (org.osgi.framework.Constants.PROVIDE_CAPABILITY.equalsIgnoreCase((String) key)) {
-					return getExtra(org.osgi.framework.Constants.PROVIDE_CAPABILITY, org.osgi.framework.Constants.FRAMEWORK_SYSTEMCAPABILITIES, org.osgi.framework.Constants.FRAMEWORK_SYSTEMCAPABILITIES_EXTRA);
+				if (!Boolean.valueOf(getEquinoxContainer().getConfiguration().getConfiguration(EquinoxConfiguration.PROP_SYSTEM_ORIGINAL_HEADERS, "false"))) { //$NON-NLS-1$
+					// by default we append the extra capabilities to the Export-Package and Provide-Capability headers
+					if (org.osgi.framework.Constants.EXPORT_PACKAGE.equalsIgnoreCase((String) key)) {
+						return getExtra(org.osgi.framework.Constants.EXPORT_PACKAGE, org.osgi.framework.Constants.FRAMEWORK_SYSTEMPACKAGES, org.osgi.framework.Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA);
+					} else if (org.osgi.framework.Constants.PROVIDE_CAPABILITY.equalsIgnoreCase((String) key)) {
+						return getExtra(org.osgi.framework.Constants.PROVIDE_CAPABILITY, org.osgi.framework.Constants.FRAMEWORK_SYSTEMCAPABILITIES, org.osgi.framework.Constants.FRAMEWORK_SYSTEMCAPABILITIES_EXTRA);
+					}
 				}
 				return headers.get(key);
 			}
@@ -147,6 +143,9 @@ public class EquinoxBundle implements Bundle, BundleReference {
 			}
 
 			void asyncStop() throws BundleException {
+				if (getEquinoxContainer().getConfiguration().getDebug().DEBUG_SYSTEM_BUNDLE) {
+					Debug.printStackTrace(new Exception("Framework has been requested to stop.")); //$NON-NLS-1$
+				}
 				lockStateChange(ModuleEvent.STOPPED);
 				try {
 					if (Module.ACTIVE_SET.contains(getState())) {
@@ -170,6 +169,9 @@ public class EquinoxBundle implements Bundle, BundleReference {
 			}
 
 			void asyncUpdate() throws BundleException {
+				if (getEquinoxContainer().getConfiguration().getDebug().DEBUG_SYSTEM_BUNDLE) {
+					Debug.printStackTrace(new Exception("Framework has been requested to update (restart).")); //$NON-NLS-1$
+				}
 				lockStateChange(ModuleEvent.UPDATED);
 				try {
 					if (Module.ACTIVE_SET.contains(getState())) {
@@ -202,40 +204,22 @@ public class EquinoxBundle implements Bundle, BundleReference {
 
 		public void init(FrameworkListener... listeners) throws BundleException {
 			if (listeners != null) {
+				if (getEquinoxContainer().getConfiguration().getDebug().DEBUG_SYSTEM_BUNDLE) {
+					Debug.println("Initializing framework with framework listeners: " + listeners); //$NON-NLS-1$
+				}
 				initListeners.addAll(Arrays.asList(listeners));
+			} else {
+				if (getEquinoxContainer().getConfiguration().getDebug().DEBUG_SYSTEM_BUNDLE) {
+					Debug.println("Initializing framework with framework no listeners"); //$NON-NLS-1$
+				}
 			}
 			try {
 				((SystemModule) getModule()).init();
 			} finally {
 				if (!initListeners.isEmpty()) {
-					flushFrameworkEvents();
+					getEquinoxContainer().getEventPublisher().flushFrameworkEvents();
 					removeInitListeners();
 				}
-			}
-		}
-
-		private void flushFrameworkEvents() {
-			EventDispatcher<Object, Object, CountDownLatch> dispatcher = new EventDispatcher<Object, Object, CountDownLatch>() {
-				@Override
-				public void dispatchEvent(Object eventListener, Object listenerObject, int eventAction, CountDownLatch flushedSignal) {
-					// Signal that we have flushed all events
-					flushedSignal.countDown();
-				}
-			};
-
-			ListenerQueue<Object, Object, CountDownLatch> queue = getEquinoxContainer().newListenerQueue();
-			queue.queueListeners(Collections.<Object, Object> singletonMap(dispatcher, dispatcher).entrySet(), dispatcher);
-
-			// fire event with the flushedSignal latch
-			CountDownLatch flushedSignal = new CountDownLatch(1);
-			queue.dispatchEventAsynchronous(0, flushedSignal);
-
-			try {
-				// Wait for the flush signal; timeout after 30 seconds
-				flushedSignal.await(30, TimeUnit.SECONDS);
-			} catch (InterruptedException e) {
-				// ignore but reset the interrupted flag
-				Thread.currentThread().interrupt();
 			}
 		}
 

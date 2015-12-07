@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2014 IBM Corporation and others.
+ * Copyright (c) 2000, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -10,6 +10,8 @@
  *     Anton Leherbauer (Wind River Systems) - bug 301226
  *     Red Hat Inc. - bug 373640, 379102
  *     Ericsson AB (Pascal Rapicault) - bug 304132
+ *     Rapicorp, Inc - Default the configuration to Application Support (bug 461725)
+ *     Lars Vogel <Lars.Vogel@vogella.com> - Bug 221969
  *******************************************************************************/
 package org.eclipse.equinox.launcher;
 
@@ -142,8 +144,9 @@ public class Main {
 	private static final String LAUNCHER = "-launcher"; //$NON-NLS-1$
 
 	private static final String PROTECT = "-protect"; //$NON-NLS-1$
-	//currently the only level of protection we care about
-	private static final String MASTER = "master"; //$NON-NLS-1$
+	//currently the only level of protection we care about.
+	private static final String PROTECT_MASTER = "master"; //$NON-NLS-1$
+	private static final String PROTECT_BASE = "base"; //$NON-NLS-1$
 
 	private static final String LIBRARY = "--launcher.library"; //$NON-NLS-1$
 	private static final String APPEND_VMARGS = "--launcher.appendVmargs"; //$NON-NLS-1$
@@ -241,7 +244,7 @@ public class Main {
 	protected BufferedWriter log = null;
 	protected boolean newSession = true;
 
-	private boolean protectMaster;
+	private boolean protectBase = false;
 
 	// for variable substitution
 	public static final String VARIABLE_DELIM_STRING = "$"; //$NON-NLS-1$
@@ -428,6 +431,9 @@ public class Main {
 	 *  Sets up the JNI bridge to native calls
 	 */
 	private void setupJNI(URL[] defaultPath) {
+		if (bridge != null)
+			return;
+
 		String libPath = null;
 
 		if (library != null) {
@@ -569,7 +575,7 @@ public class Main {
 		setupVMProperties();
 		processConfiguration();
 
-		if (protectMaster && (System.getProperty(PROP_SHARED_CONFIG_AREA) == null)) {
+		if (protectBase && (System.getProperty(PROP_SHARED_CONFIG_AREA) == null)) {
 			System.err.println("This application is configured to run in a cascaded mode only."); //$NON-NLS-1$
 			System.setProperty(PROP_EXITCODE, "" + 14); //$NON-NLS-1$
 			return;
@@ -631,7 +637,23 @@ public class Main {
 	}
 
 	private void invokeFramework(String[] passThruArgs, URL[] bootPath) throws ClassNotFoundException, NoSuchMethodException, IllegalAccessException, Error, Exception, InvocationTargetException {
-		String type = System.getProperty(PROP_FRAMEWORK_PARENT_CLASSLOADER, System.getProperty(PROP_PARENT_CLASSLOADER, PARENT_CLASSLOADER_BOOT));
+		String type = PARENT_CLASSLOADER_BOOT;
+		try {
+			String javaVersion = System.getProperty("java.version"); //$NON-NLS-1$
+			if (javaVersion != null && new Identifier(javaVersion).isGreaterEqualTo(new Identifier("1.9"))) { //$NON-NLS-1$
+				// Workaround for bug 466683. Some org.w3c.dom.* packages that used to be available from
+				// JavaSE's boot classpath are only available from the extension path in Java 9 b62.
+				type = PARENT_CLASSLOADER_EXT;
+			}
+		} catch (SecurityException e) {
+			// If the security manager won't allow us to get the system property, continue for
+			// now and let things fail later on their own if necessary.
+		} catch (NumberFormatException e) {
+			// If the version string was in a format that we don't understand, continue and
+			// let things fail later on their own if necessary.
+		}
+		type = System.getProperty(PROP_PARENT_CLASSLOADER, type);
+		type = System.getProperty(PROP_FRAMEWORK_PARENT_CLASSLOADER, type);
 		ClassLoader parent = null;
 		if (PARENT_CLASSLOADER_APP.equalsIgnoreCase(type))
 			parent = ClassLoader.getSystemClassLoader();
@@ -1300,6 +1322,10 @@ public class Main {
 		//    exist, use "eclipse" as the application-id.
 
 		URL install = getInstallLocation();
+		if (protectBase) {
+			return computeDefaultUserAreaLocation(CONFIG_DIR);
+		}
+
 		// TODO a little dangerous here.  Basically we have to assume that it is a file URL.
 		if (install.getProtocol().equals("file")) { //$NON-NLS-1$
 			File installDir = new File(install.getFile());
@@ -1350,6 +1376,16 @@ public class Main {
 		File installDir = new File(installURL.getFile());
 		String installDirHash = getInstallDirHash();
 
+		if (protectBase && Constants.OS_MACOSX.equals(os)) {
+			initializeBridgeEarly();
+			String macConfiguration = computeConfigurationLocationForMacOS();
+			if (macConfiguration != null) {
+				return macConfiguration;
+			}
+			if (debug)
+				System.out.println("Computation of Mac specific configuration folder failed."); //$NON-NLS-1$
+		}
+
 		String appName = "." + ECLIPSE; //$NON-NLS-1$
 		File eclipseProduct = new File(installDir, PRODUCT_SITE_MARKER);
 		if (eclipseProduct.exists()) {
@@ -1378,8 +1414,23 @@ public class Main {
 		return new File(userHome, appName + "/" + pathAppendage).getAbsolutePath(); //$NON-NLS-1$
 	}
 
+	private String computeConfigurationLocationForMacOS() {
+		if (bridge != null) {
+			String folder = bridge.getOSRecommendedFolder();
+			if (debug)
+				System.out.println("App folder provided by MacOS is: " + folder); //$NON-NLS-1$
+			if (folder != null)
+				return folder + '/' + CONFIG_DIR;
+		}
+		return null;
+	}
+
 	private String OS_WS_ARCHToString() {
 		return getOS() + '_' + getWS() + '_' + getArch();
+	}
+
+	private void initializeBridgeEarly() {
+		setupJNI(null);
 	}
 
 	/**
@@ -1481,6 +1532,10 @@ public class Main {
 				else
 					message += ".  See the log file\n" + logFile.getAbsolutePath(); //$NON-NLS-1$
 				System.getProperties().put(PROP_EXITDATA, message);
+			} else {
+				// we have an exit code of 13, in most cases the user tries to start a 32/64 bit Eclipse
+				// on a 64/32 bit Eclipse
+				log("Are you trying to start an 64/32-bit Eclipse on a 32/64-JVM? These must be the same, as Eclipse uses native code.");
 			}
 			// Return "unlucky" 13 as the exit code. The executable will recognize
 			// this constant and display a message to the user telling them that
@@ -1586,8 +1641,8 @@ public class Main {
 				found = true;
 				//consume next parameter
 				configArgs[configArgIndex++] = i++;
-				if (args[i].equalsIgnoreCase(MASTER)) {
-					protectMaster = true;
+				if (args[i].equalsIgnoreCase(PROTECT_MASTER) || args[i].equalsIgnoreCase(PROTECT_BASE)) {
+					protectBase = true;
 				}
 			}
 

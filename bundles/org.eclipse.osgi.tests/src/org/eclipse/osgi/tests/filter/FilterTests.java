@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2008, 2009 IBM Corporation and others.
+ * Copyright (c) 2008, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -59,7 +59,7 @@ public abstract class FilterTests extends TestCase {
 		props.put("floatvalue", new Float(1.01));
 		props.put("doublevalue", new Double(2.01));
 		props.put("charvalue", new Character('A'));
-		props.put("booleanvalue", new Boolean(true));
+		props.put("booleanvalue", Boolean.TRUE);
 		props.put("weirdvalue", new Hashtable());
 		props.put("primintarrayvalue", new int[] {1, 2, 3});
 		props.put("primlongarrayvalue", new long[] {1, 2, 3});
@@ -416,7 +416,7 @@ public abstract class FilterTests extends TestCase {
 		}
 
 		public String[] getPropertyKeys() {
-			return (String[]) keys.clone();
+			return keys.clone();
 		}
 
 		public int compareTo(Object reference) {
