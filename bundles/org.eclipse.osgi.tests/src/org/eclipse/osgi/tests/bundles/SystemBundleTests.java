@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2008, 2015 IBM Corporation and others.
+ * Copyright (c) 2008, 2016 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -34,7 +34,10 @@ import org.osgi.framework.hooks.resolver.ResolverHook;
 import org.osgi.framework.hooks.resolver.ResolverHookFactory;
 import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
+import org.osgi.framework.namespace.NativeNamespace;
 import org.osgi.framework.wiring.*;
+import org.osgi.resource.Capability;
+import org.osgi.resource.Requirement;
 import org.osgi.service.packageadmin.ExportedPackage;
 import org.osgi.service.packageadmin.PackageAdmin;
 import org.osgi.service.startlevel.StartLevel;
@@ -2266,6 +2269,7 @@ public class SystemBundleTests extends AbstractBundleTests {
 				EquinoxConfiguration.PROP_OSGI_WS, //
 				EquinoxConfiguration.PROP_OSGI_NL, //
 				EquinoxConfiguration.PROP_STATE_SAVE_DELAY_INTERVAL, //
+				EquinoxConfiguration.PROP_INIT_UUID, //
 				"gosh.args", //
 				EquinoxLocations.PROP_HOME_LOCATION_AREA, //
 				EquinoxLocations.PROP_CONFIG_AREA, //
@@ -2317,6 +2321,78 @@ public class SystemBundleTests extends AbstractBundleTests {
 		assertEquals("Got wrong value from system properties.", System.getProperty(getName()), getName());
 		envInfo.setProperty(getName(), null);
 		assertNull("Did not get null system value.", System.getProperties().get(getName()));
+		equinox.stop();
+	}
+
+	public void testBackedBySystemReplaceSystemProperties() throws BundleException {
+		File config = OSGiTestsActivator.getContext().getDataFile(getName()); //$NON-NLS-1$
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		configuration.put("osgi.framework.useSystemProperties", "true");
+		Equinox equinox = new Equinox(configuration);
+		equinox.start();
+		ServiceReference<EnvironmentInfo> envRef = equinox.getBundleContext().getServiceReference(EnvironmentInfo.class);
+		EnvironmentInfo envInfo = equinox.getBundleContext().getService(envRef);
+
+		// replace the system properties with a copy
+		Properties copy = new Properties();
+		copy.putAll(System.getProperties());
+		System.setProperties(copy);
+
+		// set a system prop for this test after replacement of the properties object
+		String systemKey = getName() + ".system";
+		System.setProperty(systemKey, getName());
+
+		// make sure context properties reflect the new test prop
+		assertEquals("Wrong context value", getName(), equinox.getBundleContext().getProperty(systemKey));
+
+		// also test EnvironmentInfo properties
+		assertEquals("Wrong context value", getName(), envInfo.getProperty(systemKey));
+		assertEquals("Wrong EquinoxConfiguration config value", getName(), ((EquinoxConfiguration) envInfo).getConfiguration(systemKey));
+
+		// set environment info prop
+		String envKey = getName() + ".env";
+		envInfo.setProperty(envKey, getName());
+
+		// make sure the system properties reflect the new test prop
+		assertEquals("Wrong system value", getName(), System.getProperty(envKey));
+		equinox.stop();
+	}
+
+	public void testLocalConfigReplaceSystemProperties() throws BundleException {
+		File config = OSGiTestsActivator.getContext().getDataFile(getName()); //$NON-NLS-1$
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		Equinox equinox = new Equinox(configuration);
+		equinox.start();
+		ServiceReference<EnvironmentInfo> envRef = equinox.getBundleContext().getServiceReference(EnvironmentInfo.class);
+		EnvironmentInfo envInfo = equinox.getBundleContext().getService(envRef);
+
+		// replace the system properties with a copy
+		Properties copy = new Properties();
+		copy.putAll(System.getProperties());
+		System.setProperties(copy);
+
+		// set a system prop for this test after replacement of the properties object
+		String systemKey = getName() + ".system";
+		System.setProperty(systemKey, getName());
+
+		// make sure context properties reflect the new system test prop.
+		// remember context properties are backed by system properties
+		assertEquals("Wrong context value", getName(), equinox.getBundleContext().getProperty(systemKey));
+
+		// also test EnvironmentInfo properties.
+		// remember the getProperty method is backed by system properties
+		assertEquals("Wrong context value", getName(), envInfo.getProperty(systemKey));
+		// config options are not backed by system properties when framework is not using system properties for configuration
+		assertNull("Wrong EquinoxConfiguration config value", ((EquinoxConfiguration) envInfo).getConfiguration(systemKey));
+
+		// set environment info prop
+		String envKey = getName() + ".env";
+		envInfo.setProperty(envKey, getName());
+
+		// make sure the system properties does NOT reflect the new test prop
+		assertNull("Wrong system value", System.getProperty(envKey));
 		equinox.stop();
 	}
 
@@ -2518,31 +2594,117 @@ public class SystemBundleTests extends AbstractBundleTests {
 		config.mkdirs();
 		Map<String, Object> configuration = new HashMap<String, Object>();
 		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
-		configuration.put(Constants.FRAMEWORK_SYSTEMCAPABILITIES_EXTRA, "something.extra; attr1=value2");
-		configuration.put(Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA, "some.extra.pkg");
+		configuration.put(Constants.FRAMEWORK_SYSTEMCAPABILITIES, "osgi.ee; osgi.ee=JavaSE; version:Version=1.6, something.system");
+		configuration.put(Constants.FRAMEWORK_SYSTEMPACKAGES, "something.system");
+		configuration.put(Constants.FRAMEWORK_SYSTEMCAPABILITIES_EXTRA, "something.extra");
+		configuration.put(Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA, "something.extra");
 
 		Equinox equinox = new Equinox(configuration);
 		equinox.start();
 		Dictionary<String, String> headers = equinox.getHeaders();
 		String provideCapability = headers.get(Constants.PROVIDE_CAPABILITY);
 		String exportPackage = headers.get(Constants.EXPORT_PACKAGE);
+		assertTrue("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.system"));
+		assertTrue("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.system"));
 		assertTrue("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.extra"));
-		assertTrue("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("some.extra.pkg"));
+		assertTrue("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.extra"));
 		equinox.stop();
 
 		equinox.waitForStop(5000);
 
-		configuration.put(EquinoxConfiguration.PROP_SYSTEM_ORIGINAL_HEADERS, "true");
+		configuration.put(EquinoxConfiguration.PROP_SYSTEM_PROVIDE_HEADER, EquinoxConfiguration.SYSTEM_PROVIDE_HEADER_ORIGINAL);
 		equinox = new Equinox(configuration);
 		equinox.start();
 		headers = equinox.getHeaders();
 		provideCapability = headers.get(Constants.PROVIDE_CAPABILITY);
 		exportPackage = headers.get(Constants.EXPORT_PACKAGE);
+		assertFalse("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.system"));
+		assertFalse("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.system"));
 		assertFalse("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.extra"));
-		assertFalse("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("some.extra.pkg"));
+		assertFalse("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.extra"));
 		equinox.stop();
 
 		equinox.waitForStop(5000);
+
+		configuration.put(EquinoxConfiguration.PROP_SYSTEM_PROVIDE_HEADER, EquinoxConfiguration.SYSTEM_PROVIDE_HEADER_SYSTEM);
+		equinox = new Equinox(configuration);
+		equinox.start();
+		headers = equinox.getHeaders();
+		provideCapability = headers.get(Constants.PROVIDE_CAPABILITY);
+		exportPackage = headers.get(Constants.EXPORT_PACKAGE);
+		assertTrue("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.system"));
+		assertTrue("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.system"));
+		assertFalse("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.extra"));
+		assertFalse("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.extra"));
+		equinox.stop();
+
+		equinox.waitForStop(5000);
+
+		configuration.put(EquinoxConfiguration.PROP_SYSTEM_PROVIDE_HEADER, EquinoxConfiguration.SYSTEM_PROVIDE_HEADER_SYSTEM_EXTRA);
+		equinox = new Equinox(configuration);
+		equinox.start();
+		headers = equinox.getHeaders();
+		provideCapability = headers.get(Constants.PROVIDE_CAPABILITY);
+		exportPackage = headers.get(Constants.EXPORT_PACKAGE);
+		assertTrue("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.system"));
+		assertTrue("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.system"));
+		assertTrue("Unexpected Provide-Capability header: " + provideCapability, provideCapability.contains("something.extra"));
+		assertTrue("Unexpected Export-Package header: " + exportPackage, exportPackage.contains("something.extra"));
+		equinox.stop();
+
+		equinox.waitForStop(5000);
+	}
+
+	public void testSystemBundleLoader() {
+		Bundle systemBundle = OSGiTestsActivator.getContext().getBundle(Constants.SYSTEM_BUNDLE_LOCATION);
+		BundleWiring wiring = systemBundle.adapt(BundleWiring.class);
+		ClassLoader cl = wiring.getClassLoader();
+		assertNotNull("No system bundle class loader.", cl);
+	}
+
+	public void testJavaProfile() {
+		String original = System.getProperty("java.specification.version");
+		try {
+			doTestJavaProfile("9.3.1", "JavaSE-9");
+			doTestJavaProfile("9", "JavaSE-9");
+			doTestJavaProfile("8.4", "JavaSE-1.8");
+			doTestJavaProfile("1.10.1", "JavaSE-1.8");
+			doTestJavaProfile("1.9", "JavaSE-1.8");
+			doTestJavaProfile("1.8", "JavaSE-1.8");
+			doTestJavaProfile("1.7", "JavaSE-1.7");
+		} finally {
+			System.setProperty("java.specification.version", original);
+		}
+	}
+
+	private void doTestJavaProfile(String javaSpecVersion, String expectedEEName) {
+		System.setProperty("java.specification.version", javaSpecVersion);
+		// create/stop/ test
+		File config = OSGiTestsActivator.getContext().getDataFile(getName() + javaSpecVersion);
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		Equinox equinox = new Equinox(configuration);
+		try {
+			equinox.init();
+		} catch (BundleException e) {
+			fail("Unexpected exception in init()", e); //$NON-NLS-1$
+		}
+		@SuppressWarnings("deprecation")
+		String osgiEE = equinox.getBundleContext().getProperty(Constants.FRAMEWORK_EXECUTIONENVIRONMENT);
+		// don't do anything; just put the framework back to the RESOLVED state
+		try {
+			equinox.stop();
+		} catch (BundleException e) {
+			fail("Unexpected error stopping framework", e); //$NON-NLS-1$
+		}
+		try {
+			equinox.waitForStop(10000);
+		} catch (InterruptedException e) {
+			fail("Unexpected interrupted exception", e); //$NON-NLS-1$
+		}
+		assertEquals("Wrong state for SystemBundle", Bundle.RESOLVED, equinox.getState()); //$NON-NLS-1$
+
+		assertTrue("Wrong osgi EE: " + osgiEE, osgiEE.endsWith(expectedEEName));
 	}
 
 	private static File[] createBundles(File outputDir, int bundleCount) throws IOException {
@@ -2595,5 +2757,64 @@ public class SystemBundleTests extends AbstractBundleTests {
 		jos.flush();
 		jos.close();
 		return file;
+	}
+
+	public void testBug405919() throws Exception {
+		File config = OSGiTestsActivator.getContext().getDataFile(getName());
+		config.mkdirs();
+		Map<String, Object> configuration = new HashMap<String, Object>();
+		configuration.put(Constants.FRAMEWORK_STORAGE, config.getAbsolutePath());
+		configuration.put("osgi.framework", "boo");
+		// Initialize and start a framework specifying an invalid osgi.framework configuration value.
+		Equinox equinox = null;
+		try {
+			equinox = new Equinox(configuration);
+			equinox.start();
+		} catch (NullPointerException e) {
+			fail("failed to accept an invalid value for osgi.framework", e);
+		}
+		try {
+			// Make sure the framework can install and start a bundle.
+			BundleContext systemContext = equinox.getBundleContext();
+			try {
+				Bundle tb1 = systemContext.installBundle(installer.getBundleLocation("test.bug375784"));
+				tb1.start();
+			} catch (BundleException e) {
+				fail("failed to install and start test bundle", e);
+			}
+			// Check the capabilities and requirements of the system bundle.
+			BundleRevision inner = systemContext.getBundle().adapt(BundleRevision.class);
+			BundleRevision outer = getContext().getBundle(0).adapt(BundleRevision.class);
+			// Capabilities.
+			List<Capability> innerCaps = inner.getCapabilities(null);
+			List<Capability> outerCaps = outer.getCapabilities(null);
+			assertEquals("Number of capabilities differ", outerCaps.size(), innerCaps.size());
+			for (int i = 0; i < innerCaps.size(); i++) {
+				Capability innerCap = innerCaps.get(i);
+				Capability outerCap = innerCaps.get(i);
+				assertEquals("Capability namespaces differ: " + outerCap.getNamespace(), outerCap.getNamespace(), innerCap.getNamespace());
+				String namespace = outerCap.getNamespace();
+				if (NativeNamespace.NATIVE_NAMESPACE.equals(namespace) || "eclipse.platform".equals(namespace)) {
+					// Ignore these because they are known to differ.
+					continue;
+				}
+				assertEquals("Capability attributes differ: " + outerCap.getNamespace(), outerCap.getAttributes(), innerCap.getAttributes());
+				assertEquals("Capability directives differ: " + outerCap.getNamespace(), outerCap.getDirectives(), innerCap.getDirectives());
+			}
+			// Requirements.
+			List<Requirement> innerReqs = inner.getRequirements(null);
+			List<Requirement> outerReqs = outer.getRequirements(null);
+			assertEquals("Number of requirements differ", outerReqs.size(), innerReqs.size());
+			for (int i = 0; i < innerReqs.size(); i++) {
+				Requirement innerReq = innerReqs.get(i);
+				Requirement outerReq = innerReqs.get(i);
+				assertEquals("Requirement namespaces differ: " + outerReq.getNamespace(), outerReq.getNamespace(), innerReq.getNamespace());
+				assertEquals("Requirement attributes differ: " + outerReq.getNamespace(), outerReq.getAttributes(), innerReq.getAttributes());
+				assertEquals("Requirement directives differ: " + outerReq.getNamespace(), outerReq.getDirectives(), innerReq.getDirectives());
+			}
+		} finally {
+			equinox.stop();
+			equinox.waitForStop(5000);
+		}
 	}
 }

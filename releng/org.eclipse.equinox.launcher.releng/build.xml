@@ -49,7 +49,6 @@
 			<or>
 				<equals arg1="s390" arg2="${arch}" />
 				<equals arg1="s390x" arg2="${arch}" />
-				<equals arg1="motif.sparc" arg2="${ws}.${arch}" />
 				<equals arg1="win32.ia64" arg2="${ws}.${arch}" />
 			</or>
 		</condition>
@@ -68,13 +67,6 @@
 		</condition>
 	</target>
 
-	<target name="copyMotifLib" if="copyMotifLib" >
-		<scp file="${userName}@${machine}:${lib_dir}/libeclipse-motif.so"
-			todir="${localGit}/rt.equinox.binaries/${fragmentFolder}"
-			keyfile="${keyfile}"
-			trust="true"/>
-	</target>
-	
 	<target name="copyMacPPC" if="copyMacPPC" >
 		<scp file="${userName}@${machine}:${lib_dir}/eclipse"
 			todir="${localGit}/rt.equinox.binaries/org.eclipse.equinox.executable/${exeFolder}/${ws}/${os}/ppc${mac_suffix}"
@@ -162,7 +154,7 @@
 			todir="${userName}@${machine}:${remotebuilddir}" 
 			keyfile="${keyfile}"
 			trust="true"/>
-		<condition property="lib_dir" value="${remotetmpdir}/carbon" else="${remotetmpdir}/${ws}" >
+		<condition property="lib_dir" value="${remotetmpdir}/cocoa" else="${remotetmpdir}/${ws}" >
 			<equals arg1="cocoa" arg2="${ws}" />
 		</condition>
 		<condition property="javaParam" value="" else="-java ${javaArg}" >
@@ -173,7 +165,7 @@
 				</not>
 			</or>
 		</condition>
-		<condition property="build_cmd" value="unix2dos *; unix2dos ${remotetmpdir}/win32/*; unix2dos ${remotetmpdir}/wpf/*; if cmd /c build.bat ${arch} clean all" else="if sh build.sh -os ${os} -ws ${ws} -arch ${arch} ${javaParam} all">
+		<condition property="build_cmd" value="unix2dos *; unix2dos ${remotetmpdir}/win32/*; if cmd /c build.bat ${arch} clean all" else="if sh build.sh -os ${os} -ws ${ws} -arch ${arch} ${javaParam} all">
 			<equals arg1="${os}" arg2="win32"/>
 		</condition>
 		<condition property="exit_cmd" value="exit;" else="">
@@ -220,10 +212,6 @@
 			</and>
 		</condition>
 		<antcall target="copyMacPPC" />
-		<condition property="copyMotifLib" >
-			<equals arg1="aix.motif" arg2="${os}.${ws}" />
-		</condition>
-		<antcall target="copyMotifLib" />
 		<sshexec host="${machine}" 
 			username="${userName}" 
 			keyfile="${keyfile}" 

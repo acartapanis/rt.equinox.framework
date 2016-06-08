@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013 IBM Corporation and others.
+ * Copyright (c) 2013, 2016 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -29,7 +29,7 @@ public class ClassLoaderHookTests extends AbstractFrameworkHookTests {
 	private static final String TEST_BUNDLE = "substitutes.a";
 	private static final String TEST_CLASSNAME = "substitutes.x.Ax";
 	private static final String HOOK_CONFIGURATOR_BUNDLE = "classloader.hooks.a";
-	private static final String HOOK_CONFIGURATOR_CLASS = "classloader.hooks.a.TestHookConfigurator";
+	private static final String HOOK_CONFIGURATOR_CLASS = "org.eclipse.osgi.tests.classloader.hooks.a.TestHookConfigurator";
 	private static final String REJECT_PROP = "classloader.hooks.a.reject";
 	private static final String BAD_TRANSFORM_PROP = "classloader.hooks.a.bad.transform";
 
@@ -88,7 +88,7 @@ public class ClassLoaderHookTests extends AbstractFrameworkHookTests {
 		b.loadClass(TEST_CLASSNAME);
 		// class load must succeed because the badbytes got rejected
 		// make sure we don't have any dynamic imports added
-		assertEquals("Found some imports.", 2, b.adapt(BundleRevision.class).getWiring().getRequirements(PackageNamespace.PACKAGE_NAMESPACE).size());
+		assertEquals("Found some imports.", 0, b.adapt(BundleRevision.class).getWiring().getRequirements(PackageNamespace.PACKAGE_NAMESPACE).size());
 
 		// no don't reject
 		setRejectTransformation(false);
@@ -100,7 +100,7 @@ public class ClassLoaderHookTests extends AbstractFrameworkHookTests {
 		}
 		// class load must fail because the badbytes got used to define the class
 		// make sure we have a dynamic imports added
-		assertEquals("Found some imports.", 3, b.adapt(BundleRevision.class).getWiring().getRequirements(PackageNamespace.PACKAGE_NAMESPACE).size());
+		assertEquals("Found some imports.", 1, b.adapt(BundleRevision.class).getWiring().getRequirements(PackageNamespace.PACKAGE_NAMESPACE).size());
 	}
 
 	public void testRejectTransformationFromClassLoadingHook() throws Exception {

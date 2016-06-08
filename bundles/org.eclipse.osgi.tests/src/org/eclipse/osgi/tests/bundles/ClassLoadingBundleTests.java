@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2006, 2015 IBM Corporation and others.
+ * Copyright (c) 2006, 2016 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -14,6 +14,11 @@ import java.io.*;
 import java.lang.reflect.Method;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.*;
+import javax.jws.WebService;
+import javax.xml.namespace.QName;
+import javax.xml.ws.Endpoint;
+import javax.xml.ws.Service;
 import junit.framework.Test;
 import junit.framework.TestSuite;
 import org.eclipse.osgi.tests.OSGiTestsActivator;
@@ -98,7 +103,7 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		Bundle chainTestD = installer.installBundle("chain.test.d"); //$NON-NLS-1$
 		chainTest.loadClass("chain.test.TestMultiChain").newInstance(); //$NON-NLS-1$
 
-		Object[] expectedEvents = new Object[12];
+		Object[] expectedEvents = new Object[8];
 		expectedEvents[0] = new BundleEvent(BundleEvent.STARTED, chainTestD);
 		expectedEvents[1] = new BundleEvent(BundleEvent.STARTED, chainTestB);
 		expectedEvents[2] = new BundleEvent(BundleEvent.STARTED, chainTestC);
@@ -107,14 +112,20 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		expectedEvents[5] = new BundleEvent(BundleEvent.STOPPED, chainTestB);
 		expectedEvents[6] = new BundleEvent(BundleEvent.STOPPED, chainTestC);
 		expectedEvents[7] = new BundleEvent(BundleEvent.STOPPED, chainTestD);
-		expectedEvents[8] = new BundleEvent(BundleEvent.STARTED, chainTestD);
-		expectedEvents[9] = new BundleEvent(BundleEvent.STARTED, chainTestC);
-		expectedEvents[10] = new BundleEvent(BundleEvent.STARTED, chainTestB);
-		expectedEvents[11] = new BundleEvent(BundleEvent.STARTED, chainTestA);
 
 		installer.refreshPackages(new Bundle[] {chainTestC, chainTestD});
 
-		Object[] actualEvents = simpleResults.getResults(12);
+		Object[] actualEvents = simpleResults.getResults(8);
+		compareResults(expectedEvents, actualEvents);
+
+		chainTest.loadClass("chain.test.TestMultiChain").newInstance(); //$NON-NLS-1$
+		expectedEvents = new Object[4];
+		expectedEvents[0] = new BundleEvent(BundleEvent.STARTED, chainTestD);
+		expectedEvents[1] = new BundleEvent(BundleEvent.STARTED, chainTestB);
+		expectedEvents[2] = new BundleEvent(BundleEvent.STARTED, chainTestC);
+		expectedEvents[3] = new BundleEvent(BundleEvent.STARTED, chainTestA);
+
+		actualEvents = simpleResults.getResults(4);
 		compareResults(expectedEvents, actualEvents);
 	}
 
@@ -1660,6 +1671,97 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		global.loadClass("test.bug438904.frag.Test2");
 	}
 
+	public void testContextFinderGetResource() throws IOException, InvalidSyntaxException {
+		// get the context finder explicitly to test incase the thread context class loader has changed
+		ClassLoader contextFinder = getContext().getService(getContext().getServiceReferences(ClassLoader.class, "(equinox.classloader.type=contextClassLoader)").iterator().next());
+		// Using a resource we know is in java 8.
+		String resource = "META-INF/services/javax.print.PrintServiceLookup";
+		URL systemURL = ClassLoader.getSystemClassLoader().getResource(resource);
+		assertNotNull("Did not find a parent resource: " + resource, systemURL);
+		//should return the file defined in test bundle.
+		URL url = contextFinder.getResource(resource);
+		//the first element should be the file define in this bundle.
+		List<URL> urls = Collections.list(contextFinder.getResources(resource));
+		// make sure we have a resource located in the parent
+		assertTrue("Did not find a parent resource: " + urls, urls.size() > 1);
+		//assert failed as it return the one defined in parent class.
+		assertEquals(url.toExternalForm(), urls.get(0).toExternalForm());
+	}
+
+	@WebService(endpointInterface = "org.eclipse.osgi.tests.bundles.TestService")
+	public static class TestServiceImpl implements TestService {
+
+		@Override
+		public String hello(final String name) {
+			return "Hello " + name;
+		}
+
+	}
+
+	/*
+	 * This test depends on the behavior of the JVM Endpoint implementation to use
+	 * the context class loader to try and find resources using an executor.
+	 * This is important because it causes the thread stack to have NO classes
+	 * loaded by a bundle class loader.  This causes a condition that would
+	 * make ContextFinder.getResources to return null
+	 */
+	public void testContextFinderEmptyGetResources() throws Exception {
+		// get the context finder explicitly to test incase the thread context class loader has changed
+		ClassLoader contextFinder = getContext().getService(getContext().getServiceReferences(ClassLoader.class, "(equinox.classloader.type=contextClassLoader)").iterator().next());
+		ClassLoader previousTCCL = Thread.currentThread().getContextClassLoader();
+		Thread.currentThread().setContextClassLoader(contextFinder);
+		ExecutorService pool = null;
+		try {
+			pool = Executors.newFixedThreadPool(3);
+
+			final String address = "http://localhost:8888/service";
+
+			final WebService annotation = TestService.class.getAnnotation(WebService.class);
+			final String namespaceURI = annotation.serviceName();
+			final String localPart = annotation.targetNamespace();
+			final QName serviceName = new QName(namespaceURI, localPart);
+
+			final TestServiceImpl tsi = new TestServiceImpl();
+			final Endpoint endpoint = Endpoint.create(tsi);
+			final HashMap<String, Object> props = new HashMap<String, Object>();
+			props.put(Endpoint.WSDL_SERVICE, serviceName);
+
+			endpoint.setProperties(props);
+			endpoint.setExecutor(pool);
+			endpoint.publish(address);
+			final URL wsdlURL = new URL(address + "?wsdl");
+			final Service s = Service.create(wsdlURL, serviceName);
+			assertNotNull("Service is null.", s);
+			final TestService port = s.getPort(TestService.class);
+
+			assertEquals("Wrong result.", "Hello World", port.hello("World"));
+		} finally {
+			Thread.currentThread().setContextClassLoader(previousTCCL);
+			if (pool != null) {
+				pool.shutdown();
+			}
+		}
+	}
+
+	public void testBundleClassLoaderEmptyGetResources() throws Exception {
+		final ClassLoader bundleClassLoader = getClass().getClassLoader();
+		// Using a resource we know does not exist
+		final String resource = "META-INF/services/test.does.note.ExistService";
+		doTestEmptyGetResources(bundleClassLoader, resource);
+	}
+
+	private void doTestEmptyGetResources(ClassLoader testClassLoader, String resource) throws Exception {
+		URL systemURL = ClassLoader.getSystemClassLoader().getResource(resource);
+		assertNull("Found a parent resource: " + resource, systemURL);
+		// Should return null resource
+		URL testurl = testClassLoader.getResource(resource);
+		assertNull("Found a resource: " + resource, testurl);
+
+		Enumeration<URL> testResources = testClassLoader.getResources(resource);
+		assertNotNull("null resources from testClassLoader: " + resource, testResources);
+		assertFalse("Resources has elements.", testResources.hasMoreElements());
+	}
+
 	public void testBundleReference01() throws Exception {
 		Bundle test = installer.installBundle("test"); //$NON-NLS-1$
 		Class clazz = test.loadClass("test1.Activator"); //$NON-NLS-1$
@@ -2030,5 +2132,70 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		Dictionary<String, String> headers = test.getHeaders();
 		String bundleName = headers.get(Constants.BUNDLE_NAME);
 		assertEquals("Wrong bundle name header.", "default", bundleName);
+	}
+
+	public void testBug490902() throws BundleException, InterruptedException, ClassNotFoundException, InstantiationException, IllegalAccessException {
+		final Bundle a1 = installer.installBundle("test.bug490902.a");
+		final Bundle b1 = installer.installBundle("test.bug490902.b");
+		installer.resolveBundles(new Bundle[] {a1, b1});
+
+		final CountDownLatch startingB = new CountDownLatch(1);
+		final CountDownLatch endedSecondThread = new CountDownLatch(1);
+		BundleListener delayB1 = new SynchronousBundleListener() {
+			@Override
+			public void bundleChanged(BundleEvent event) {
+				if (event.getBundle() == b1 && BundleEvent.STARTING == event.getType()) {
+					try {
+						startingB.countDown();
+						System.out.println(getName() + ": Delaying now ...");
+						Thread.sleep(15000);
+						System.out.println(getName() + ": Done delaying.");
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
+			}
+		};
+		getContext().addBundleListener(delayB1);
+		try {
+			new Thread(new Runnable() {
+
+				@Override
+				public void run() {
+					try {
+						System.out.println(getName() + ": Initial load test.");
+						a1.loadClass("test.bug490902.a.TestLoadA1").newInstance();
+					} catch (Throwable e) {
+						e.printStackTrace();
+					}
+				}
+			}, "Initial load test thread.").start();
+
+			startingB.await();
+			Thread secondThread = new Thread(new Runnable() {
+
+				@Override
+				public void run() {
+					try {
+						System.out.println(getName() + ": Second load test.");
+						a1.loadClass("test.bug490902.a.TestLoadA1").newInstance();
+					} catch (Throwable e) {
+						e.printStackTrace();
+					} finally {
+						endedSecondThread.countDown();
+					}
+				}
+			}, "Second load test thread.");
+			secondThread.start();
+			// hack to make sure secondThread is in the middle of Class.forName
+			Thread.sleep(10000);
+
+			System.out.println(getName() + ": About to interrupt:" + secondThread.getName());
+			secondThread.interrupt();
+			endedSecondThread.await();
+			a1.loadClass("test.bug490902.a.TestLoadA1").newInstance();
+		} finally {
+			getContext().removeBundleListener(delayB1);
+		}
 	}
 }

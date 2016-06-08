@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2015 IBM Corporation and others.
+ * Copyright (c) 2012, 2016 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -24,10 +24,7 @@ import org.eclipse.osgi.framework.log.FrameworkLogEntry;
 import org.eclipse.osgi.framework.util.*;
 import org.eclipse.osgi.internal.container.LockSet;
 import org.eclipse.osgi.internal.debug.Debug;
-import org.eclipse.osgi.internal.framework.EquinoxConfiguration;
-import org.eclipse.osgi.internal.framework.EquinoxContainer;
-import org.eclipse.osgi.internal.framework.EquinoxContainerAdaptor;
-import org.eclipse.osgi.internal.framework.FilterImpl;
+import org.eclipse.osgi.internal.framework.*;
 import org.eclipse.osgi.internal.hookregistry.BundleFileWrapperFactoryHook;
 import org.eclipse.osgi.internal.hookregistry.StorageHookFactory;
 import org.eclipse.osgi.internal.hookregistry.StorageHookFactory.StorageHook;
@@ -75,7 +72,7 @@ public class Storage {
 	private final File parentRoot;
 	private final PermissionData permissionData;
 	private final SecurityAdmin securityAdmin;
-	private final ModuleContainerAdaptor adaptor;
+	private final EquinoxContainerAdaptor adaptor;
 	private final ModuleDatabase moduleDatabase;
 	private final ModuleContainer moduleContainer;
 	private final Object saveMonitor = new Object();
@@ -188,12 +185,14 @@ public class Storage {
 		if (systemWiring == null) {
 			return;
 		}
+		Collection<ModuleRevision> fragments = new ArrayList<ModuleRevision>();
 		for (ModuleWire hostWire : systemWiring.getProvidedModuleWires(HostNamespace.HOST_NAMESPACE)) {
-			try {
-				getExtensionInstaller().addExtensionContent(hostWire.getRequirer(), null);
-			} catch (BundleException e) {
-				getLogServices().log(EquinoxContainer.NAME, FrameworkLogEntry.ERROR, e.getMessage(), e);
-			}
+			fragments.add(hostWire.getRequirer());
+		}
+		try {
+			getExtensionInstaller().addExtensionContent(fragments, null);
+		} catch (BundleException e) {
+			getLogServices().log(EquinoxContainer.NAME, FrameworkLogEntry.ERROR, e.getMessage(), e);
 		}
 	}
 
@@ -273,7 +272,12 @@ public class Storage {
 						File contentFile = getSystemContent();
 						newGeneration.setContent(contentFile, false);
 						moduleContainer.update(systemModule, newBuilder, newGeneration);
-						moduleContainer.refresh(Arrays.asList(systemModule));
+						moduleContainer.refresh(Collections.singleton(systemModule));
+					} else {
+						if (currentRevision.getWiring() == null) {
+							// must resolve before continuing to ensure extensions get attached
+							moduleContainer.resolve(Collections.singleton(systemModule), true);
+						}
 					}
 				} catch (BundleException e) {
 					throw new IllegalStateException("Could not create a builder for the system bundle.", e); //$NON-NLS-1$
@@ -325,7 +329,14 @@ public class Storage {
 				}
 			}
 		}
+		for (ModuleRevision removalPending : moduleContainer.getRemovalPending()) {
+			Generation generation = (Generation) removalPending.getRevisionInfo();
+			if (generation != null) {
+				generation.close();
+			}
+		}
 		mruList.shutdown();
+		adaptor.shutdownResolverExecutor();
 	}
 
 	private boolean needUpdate(ModuleRevision currentRevision, ModuleRevisionBuilder newBuilder) {
@@ -1168,7 +1179,7 @@ public class Storage {
 		int numCachedHeaders = in.readInt();
 		List<String> storedCachedHeaderKeys = new ArrayList<String>(numCachedHeaders);
 		for (int i = 0; i < numCachedHeaders; i++) {
-			storedCachedHeaderKeys.add((String) ObjectPool.intern(in.readUTF()));
+			storedCachedHeaderKeys.add(ObjectPool.intern(in.readUTF()));
 		}
 
 		int numInfos = in.readInt();
@@ -1176,7 +1187,7 @@ public class Storage {
 		List<Generation> generations = new ArrayList<BundleInfo.Generation>(numInfos);
 		for (int i = 0; i < numInfos; i++) {
 			long infoId = in.readLong();
-			String infoLocation = (String) ObjectPool.intern(in.readUTF());
+			String infoLocation = ObjectPool.intern(in.readUTF());
 			long nextGenId = in.readLong();
 			long generationId = in.readLong();
 			boolean isDirectory = in.readBoolean();
@@ -1191,7 +1202,7 @@ public class Storage {
 				if (NUL.equals(value)) {
 					value = null;
 				} else {
-					value = (String) ObjectPool.intern(value);
+					value = ObjectPool.intern(value);
 				}
 				cachedHeaders.put(headerKey, value);
 			}
@@ -1482,11 +1493,21 @@ public class Storage {
 
 	private InputStream findNextBestProfile(Generation systemGeneration, String javaEdition, Version javaVersion, String embeddedProfileName) {
 		InputStream result = null;
+		int major = javaVersion.getMajor();
 		int minor = javaVersion.getMinor();
 		do {
-			result = findInSystemBundle(systemGeneration, javaEdition + embeddedProfileName + javaVersion.getMajor() + "." + minor + PROFILE_EXT); //$NON-NLS-1$
-			minor = minor - 1;
-		} while (result == null && minor > 0);
+			// If minor is zero then it is not included in the name
+			String profileResourceName = javaEdition + embeddedProfileName + major + ((minor > 0) ? "." + minor : "") + PROFILE_EXT; //$NON-NLS-1$ //$NON-NLS-2$
+			result = findInSystemBundle(systemGeneration, profileResourceName);
+			if (minor > 0) {
+				minor -= 1;
+			} else if (major > 9) {
+				major -= 1;
+			} else if (major <= 9 && major > 1) {
+				minor = 8;
+				major = 1;
+			}
+		} while (result == null && minor >= 0);
 		return result;
 	}
 
@@ -1713,7 +1734,7 @@ public class Storage {
 		// in cases where the temp dir may already exist.
 		Long bundleID = new Long(generation.getBundleInfo().getBundleId());
 		for (int i = 0; i < Integer.MAX_VALUE; i++) {
-			bundleTempDir = new File(libTempDir, bundleID.toString() + "_" + new Integer(i).toString()); //$NON-NLS-1$
+			bundleTempDir = new File(libTempDir, bundleID.toString() + "_" + Integer.valueOf(i).toString()); //$NON-NLS-1$
 			libTempFile = new File(bundleTempDir, libName);
 			if (bundleTempDir.exists()) {
 				if (libTempFile.exists())
