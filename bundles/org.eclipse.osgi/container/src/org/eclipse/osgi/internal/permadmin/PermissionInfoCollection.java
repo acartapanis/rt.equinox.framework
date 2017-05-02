@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2008, 2012 IBM Corporation and others.
+ * Copyright (c) 2008, 2016 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -26,7 +26,7 @@ public final class PermissionInfoCollection extends PermissionCollection {
 	static private final Class<?>[][] permClassArrayArgs = new Class[][] {noArgClassArray, oneStringClassArray, twoStringClassArray};
 
 	/* @GuardedBy(cachedPermisssionCollections) */
-	private final Map<Class<? extends Permission>, PermissionCollection> cachedPermissionCollections = new HashMap<Class<? extends Permission>, PermissionCollection>();
+	private final Map<Class<? extends Permission>, PermissionCollection> cachedPermissionCollections = new HashMap<>();
 	private final boolean hasAllPermission;
 	private final PermissionInfo[] permInfos;
 
@@ -65,7 +65,7 @@ public final class PermissionInfoCollection extends PermissionCollection {
 			try {
 				addPermissions(collection, permClass);
 			} catch (Exception e) {
-				throw (SecurityException) new SecurityException("Exception creating permissions: " + permClass + ": " + e.getMessage()).initCause(e); //$NON-NLS-1$ //$NON-NLS-2$
+				throw new SecurityException("Exception creating permissions: " + permClass + ": " + e.getMessage(), e); //$NON-NLS-1$ //$NON-NLS-2$
 			}
 			synchronized (cachedPermissionCollections) {
 				// check to see if another thread beat this thread at adding the collection

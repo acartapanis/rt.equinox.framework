@@ -10,6 +10,7 @@
  *******************************************************************************/
 package org.eclipse.osgi.internal.framework;
 
+import java.lang.reflect.Method;
 import java.security.ProtectionDomain;
 import java.util.*;
 import java.util.concurrent.*;
@@ -29,7 +30,18 @@ import org.osgi.framework.hooks.resolver.ResolverHookFactory;
 import org.osgi.framework.wiring.BundleRevision;
 
 public class EquinoxContainerAdaptor extends ModuleContainerAdaptor {
-	private static final ClassLoader BOOT_CLASSLOADER = new ClassLoader(Object.class.getClassLoader()) { /* boot class loader */};
+	public static final ClassLoader BOOT_CLASSLOADER;
+	static {
+		ClassLoader platformClassLoader = null;
+		try {
+			Method getPlatformClassLoader = ClassLoader.class.getMethod("getPlatformClassLoader"); //$NON-NLS-1$
+			platformClassLoader = (ClassLoader) getPlatformClassLoader.invoke(null);
+		} catch (Throwable t) {
+			// try everything possible to not fail <clinit>
+			platformClassLoader = new ClassLoader(Object.class.getClassLoader()) { /* boot class loader */};
+		}
+		BOOT_CLASSLOADER = platformClassLoader;
+	}
 	private final EquinoxContainer container;
 	private final Storage storage;
 	private final OSGiFrameworkHooks hooks;
@@ -38,7 +50,7 @@ public class EquinoxContainerAdaptor extends ModuleContainerAdaptor {
 	private final ClassLoader moduleClassLoaderParent;
 	private final AtomicLong lastSecurityAdminFlush;
 
-	final AtomicLazyInitializer<Executor> executor = new AtomicLazyInitializer<Executor>();
+	final AtomicLazyInitializer<Executor> executor = new AtomicLazyInitializer<>();
 	final Callable<Executor> lazyExecutorCreator;
 
 	public EquinoxContainerAdaptor(EquinoxContainer container, Storage storage, Map<Long, Generation> initial) {
@@ -77,7 +89,7 @@ public class EquinoxContainerAdaptor extends ModuleContainerAdaptor {
 				// idle timeout; make it short to get rid of threads quickly after resolve
 				int idleTimeout = 10;
 				// use sync queue to force thread creation
-				BlockingQueue<Runnable> queue = new SynchronousQueue<Runnable>();
+				BlockingQueue<Runnable> queue = new SynchronousQueue<>();
 				// try to name the threads with useful name
 				ThreadFactory threadFactory = new ThreadFactory() {
 					@Override
@@ -332,5 +344,11 @@ public class EquinoxContainerAdaptor extends ModuleContainerAdaptor {
 		if (current instanceof ExecutorService) {
 			((ExecutorService) current).shutdown();
 		}
+	}
+
+	@Override
+	public ModuleRevisionBuilder adaptModuleRevisionBuilder(ModuleEvent operation, Module origin, ModuleRevisionBuilder builder, Object revisionInfo) {
+		Generation generation = (Generation) revisionInfo;
+		return generation.adaptModuleRevisionBuilder(operation, origin, builder);
 	}
 }

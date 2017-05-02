@@ -94,9 +94,10 @@ public class BundleLoader extends ModuleLoader {
 	/* If not null, list of package names to import dynamically. */
 	private String[] dynamicImportPackages;
 
-	private Object classLoaderMonitor = new Object();
-	/* @GuardedBy("classLoaderMonitor") */
-	private ModuleClassLoader classloader;
+	private final Object classLoaderCreatedMonitor = new Object();
+	/* @GuardedBy("classLoaderCreatedMonitor") */
+	private ModuleClassLoader classLoaderCreated;
+	private volatile ModuleClassLoader classloader;
 	private final ClassLoader parent;
 	private final AtomicBoolean triggerClassLoaded = new AtomicBoolean(false);
 
@@ -209,7 +210,7 @@ public class BundleLoader extends ModuleLoader {
 	private static PackageSource createMultiSource(String packageName, PackageSource[] sources) {
 		if (sources.length == 1)
 			return sources[0];
-		List<SingleSourcePackage> sourceList = new ArrayList<SingleSourcePackage>(sources.length);
+		List<SingleSourcePackage> sourceList = new ArrayList<>(sources.length);
 		for (int i = 0; i < sources.length; i++) {
 			SingleSourcePackage[] innerSources = sources[i].getSuppliers();
 			for (int j = 0; j < innerSources.length; j++)
@@ -220,51 +221,76 @@ public class BundleLoader extends ModuleLoader {
 	}
 
 	public ModuleClassLoader getModuleClassLoader() {
-		synchronized (classLoaderMonitor) {
-			if (classloader == null) {
-				final List<ClassLoaderHook> hooks = container.getConfiguration().getHookRegistry().getClassLoaderHooks();
-				final Generation generation = (Generation) wiring.getRevision().getRevisionInfo();
-				if (System.getSecurityManager() == null) {
-					classloader = createClassLoaderPrivledged(parent, generation.getBundleInfo().getStorage().getConfiguration(), this, generation, hooks);
-				} else {
-					final ClassLoader cl = parent;
-					classloader = AccessController.doPrivileged(new PrivilegedAction<ModuleClassLoader>() {
-						@Override
-						public ModuleClassLoader run() {
-							return createClassLoaderPrivledged(cl, generation.getBundleInfo().getStorage().getConfiguration(), BundleLoader.this, generation, hooks);
-						}
-					});
+		ModuleClassLoader result = classloader;
+		if (result != null) {
+			return result;
+		}
+		// doing optimistic class loader creating here to avoid holding any locks,
+		// this may result in multiple classloaders being constructed but only one will be used.
+		final List<ClassLoaderHook> hooks = container.getConfiguration().getHookRegistry().getClassLoaderHooks();
+		final Generation generation = (Generation) wiring.getRevision().getRevisionInfo();
+		if (System.getSecurityManager() == null) {
+			result = createClassLoaderPrivledged(parent, generation.getBundleInfo().getStorage().getConfiguration(), this, generation, hooks);
+		} else {
+			final ClassLoader cl = parent;
+			result = AccessController.doPrivileged(new PrivilegedAction<ModuleClassLoader>() {
+				@Override
+				public ModuleClassLoader run() {
+					return createClassLoaderPrivledged(cl, generation.getBundleInfo().getStorage().getConfiguration(), BundleLoader.this, generation, hooks);
 				}
+			});
+		}
+
+		// Synchronize on classLoaderCreatedMonitor in order to ensure hooks are called before returning.
+		// Note that we do hold a lock here while calling hooks.
+		// Not ideal, but hooks really should do little work from classLoaderCreated method.
+		synchronized (classLoaderCreatedMonitor) {
+			if (classLoaderCreated == null) {
+				// must set createdClassloader before calling hooks; otherwise we could enter
+				// and endless loop if the hook causes re-entry (that would be a bad hook impl)
+				classLoaderCreated = result;
+				// only send to hooks if this thread wins in creating the class loader.
 				for (ClassLoaderHook hook : hooks) {
-					hook.classLoaderCreated(classloader);
+					hook.classLoaderCreated(result);
+				}
+				// finally set the class loader for use after calling hooks
+				classloader = classLoaderCreated;
+			} else {
+				// return the classLoaderCreated here; not the final classloader
+				// this is necessary in case re-entry by a hook.classLoaderCreated method
+				result = classLoaderCreated;
+				if (debug.DEBUG_LOADER) {
+					Debug.println("BundleLoader[" + this + "].getModuleClassLoader() - created duplicate classloader"); //$NON-NLS-1$ //$NON-NLS-2$
 				}
 			}
-			return classloader;
 		}
+		return result;
 	}
 
 	@Override
 	protected void loadFragments(Collection<ModuleRevision> fragments) {
-		synchronized (classLoaderMonitor) {
-			addFragmentExports(wiring.getModuleCapabilities(PackageNamespace.PACKAGE_NAMESPACE));
-			loadClassLoaderFragments(fragments);
-			clearManifestLocalizationCache();
-		}
+		addFragmentExports(wiring.getModuleCapabilities(PackageNamespace.PACKAGE_NAMESPACE));
+		loadClassLoaderFragments(fragments);
+		clearManifestLocalizationCache();
 	}
 
 	protected void clearManifestLocalizationCache() {
 		Generation hostGen = (Generation) wiring.getRevision().getRevisionInfo();
 		hostGen.clearManifestCache();
-		for (ModuleWire fragmentWire : wiring.getProvidedModuleWires(HostNamespace.HOST_NAMESPACE)) {
-			Generation fragGen = (Generation) fragmentWire.getRequirer().getRevisionInfo();
-			fragGen.clearManifestCache();
+		List<ModuleWire> hostWires = wiring.getProvidedModuleWires(HostNamespace.HOST_NAMESPACE);
+		// doing a null check because there is no lock on the module database here
+		if (hostWires != null) {
+			for (ModuleWire fragmentWire : hostWires) {
+				Generation fragGen = (Generation) fragmentWire.getRequirer().getRevisionInfo();
+				fragGen.clearManifestCache();
+			}
 		}
 	}
 
-	/* @GuardedBy("classLoaderMonitor") */
 	void loadClassLoaderFragments(Collection<ModuleRevision> fragments) {
-		if (classloader != null) {
-			classloader.loadFragments(fragments);
+		ModuleClassLoader current = classloader;
+		if (current != null) {
+			current.loadFragments(fragments);
 		}
 	}
 
@@ -289,10 +315,9 @@ public class BundleLoader extends ModuleLoader {
 				policy.close(context);
 			}
 		}
-		synchronized (classLoaderMonitor) {
-			if (classloader != null) {
-				classloader.close();
-			}
+		ModuleClassLoader current = classloader;
+		if (current != null) {
+			current.close();
 		}
 	}
 
@@ -367,7 +392,7 @@ public class BundleLoader extends ModuleLoader {
 		String pkgName = getPackageName(name);
 		boolean bootDelegation = false;
 		// follow the OSGi delegation model
-		if (checkParent && parent != null && container.isBootDelegationPackage(pkgName))
+		if (checkParent && parent != null && container.isBootDelegationPackage(pkgName)) {
 			// 2) if part of the bootdelegation list then delegate to parent and continue of failure
 			try {
 				return parent.loadClass(name);
@@ -375,6 +400,7 @@ public class BundleLoader extends ModuleLoader {
 				// we want to continue
 				bootDelegation = true;
 			}
+		}
 		Class<?> result = null;
 		try {
 			result = (Class<?>) searchHooks(name, PRE_CLASS);
@@ -438,13 +464,14 @@ public class BundleLoader extends ModuleLoader {
 			return result;
 		// hack to support backwards compatibility for bootdelegation
 		// or last resort; do class context trick to work around VM bugs
-		if (parent != null && !bootDelegation && ((checkParent && container.getConfiguration().compatibilityBootDelegation) || isRequestFromVM()))
+		if (parent != null && !bootDelegation && ((checkParent && container.getConfiguration().compatibilityBootDelegation) || isRequestFromVM())) {
 			// we don't need to continue if a CNFE is thrown here.
 			try {
 				return parent.loadClass(name);
 			} catch (ClassNotFoundException e) {
 				// we want to generate our own exception below
 			}
+		}
 		throw new ClassNotFoundException(name + " cannot be found by " + this); //$NON-NLS-1$
 	}
 
@@ -719,7 +746,7 @@ public class BundleLoader extends ModuleLoader {
 		if ((path.length() > 1) && (path.charAt(0) == '/')) /* if name has a leading slash */
 			path = path.substring(1); /* remove leading slash before search */
 		boolean subPackages = (options & BundleWiring.LISTRESOURCES_RECURSE) != 0;
-		List<String> packages = new ArrayList<String>();
+		List<String> packages = new ArrayList<>();
 		// search imported package names
 		KeyedHashSet importSources = getImportedSources(null);
 		KeyedElement[] imports;
@@ -733,7 +760,7 @@ public class BundleLoader extends ModuleLoader {
 		}
 
 		// now add package names from required bundles
-		Collection<BundleLoader> visited = new ArrayList<BundleLoader>();
+		Collection<BundleLoader> visited = new ArrayList<>();
 		visited.add(this); // always add ourselves so we do not recurse back to ourselves
 		for (ModuleWire bundleWire : requiredBundleWires) {
 			BundleLoader loader = (BundleLoader) bundleWire.getProviderWiring().getModuleLoader();
@@ -745,8 +772,8 @@ public class BundleLoader extends ModuleLoader {
 		boolean localSearch = (options & BundleWiring.LISTRESOURCES_LOCAL) != 0;
 		// Use LinkedHashSet for optimized performance of contains() plus
 		// ordering guarantees.
-		LinkedHashSet<String> result = new LinkedHashSet<String>();
-		Set<String> importedPackages = new HashSet<String>(0);
+		LinkedHashSet<String> result = new LinkedHashSet<>();
+		Set<String> importedPackages = new HashSet<>(0);
 		for (String name : packages) {
 			// look for import source
 			PackageSource externalSource = findImportedSource(name, null);
@@ -788,7 +815,7 @@ public class BundleLoader extends ModuleLoader {
 			return list1 == null ? BundleLoader.<E> emptyEnumeration() : list1;
 		if (list1 == null || !list1.hasMoreElements())
 			return list2 == null ? BundleLoader.<E> emptyEnumeration() : list2;
-		List<E> compoundResults = new ArrayList<E>();
+		List<E> compoundResults = new ArrayList<>();
 		while (list1.hasMoreElements())
 			compoundResults.add(list1.nextElement());
 		while (list2.hasMoreElements()) {
@@ -903,13 +930,14 @@ public class BundleLoader extends ModuleLoader {
 		if (visited.contains(this))
 			return;
 		visited.add(this);
-		for (String exported : exportedPackages) {
-			if (exported.equals(packageName) || (subPackages && isSubPackage(packageName, exported))) {
-				if (!result.contains(exported))
-					result.add(exported);
+		synchronized (exportedPackages) {
+			for (String exported : exportedPackages) {
+				if (exported.equals(packageName) || (subPackages && isSubPackage(packageName, exported))) {
+					if (!result.contains(exported))
+						result.add(exported);
+				}
 			}
 		}
-
 		for (String substituted : wiring.getSubstitutedNames()) {
 			if (substituted.equals(packageName) || (subPackages && isSubPackage(packageName, substituted))) {
 				if (!result.contains(substituted))
@@ -938,7 +966,7 @@ public class BundleLoader extends ModuleLoader {
 		if (packageImports == null || packageImports.isEmpty()) {
 			return;
 		}
-		List<String> dynamicImports = new ArrayList<String>(packageImports.size());
+		List<String> dynamicImports = new ArrayList<>(packageImports.size());
 		for (ModuleRequirement packageImport : packageImports) {
 			if (PackageNamespace.RESOLUTION_DYNAMIC.equals(packageImport.getDirectives().get(PackageNamespace.REQUIREMENT_RESOLUTION_DIRECTIVE))) {
 				Matcher matcher = PACKAGENAME_FILTER.matcher(packageImport.getDirectives().get(PackageNamespace.REQUIREMENT_FILTER_DIRECTIVE));
@@ -969,9 +997,9 @@ public class BundleLoader extends ModuleLoader {
 			int size = packages.length;
 			List<String> stems;
 			if (dynamicImportPackageStems == null) {
-				stems = new ArrayList<String>(size);
+				stems = new ArrayList<>(size);
 			} else {
-				stems = new ArrayList<String>(size + dynamicImportPackageStems.length);
+				stems = new ArrayList<>(size + dynamicImportPackageStems.length);
 				for (int i = 0; i < dynamicImportPackageStems.length; i++) {
 					stems.add(dynamicImportPackageStems[i]);
 				}
@@ -979,9 +1007,9 @@ public class BundleLoader extends ModuleLoader {
 
 			List<String> names;
 			if (dynamicImportPackages == null) {
-				names = new ArrayList<String>(size);
+				names = new ArrayList<>(size);
 			} else {
-				names = new ArrayList<String>(size + dynamicImportPackages.length);
+				names = new ArrayList<>(size + dynamicImportPackages.length);
 				for (int i = 0; i < dynamicImportPackages.length; i++) {
 					names.add(dynamicImportPackages[i]);
 				}
@@ -1022,7 +1050,7 @@ public class BundleLoader extends ModuleLoader {
 	public final void addDynamicImportPackage(ManifestElement[] packages) {
 		if (packages == null)
 			return;
-		List<String> dynamicImports = new ArrayList<String>(packages.length);
+		List<String> dynamicImports = new ArrayList<>(packages.length);
 		StringBuilder importSpec = new StringBuilder();
 		for (ManifestElement dynamicImportElement : packages) {
 			String[] names = dynamicImportElement.getValueComponents();
@@ -1037,7 +1065,7 @@ public class BundleLoader extends ModuleLoader {
 		if (dynamicImports.size() > 0) {
 			addDynamicImportPackage(dynamicImports.toArray(new String[dynamicImports.size()]));
 
-			Map<String, String> dynamicImportMap = new HashMap<String, String>();
+			Map<String, String> dynamicImportMap = new HashMap<>();
 			dynamicImportMap.put(Constants.DYNAMICIMPORT_PACKAGE, importSpec.toString());
 
 			try {
@@ -1118,10 +1146,10 @@ public class BundleLoader extends ModuleLoader {
 				return result.isNullSource() ? null : result;
 		}
 		if (visited == null)
-			visited = new ArrayList<BundleLoader>();
+			visited = new ArrayList<>();
 		if (!visited.contains(this))
 			visited.add(this); // always add ourselves so we do not recurse back to ourselves
-		List<PackageSource> result = new ArrayList<PackageSource>(3);
+		List<PackageSource> result = new ArrayList<>(3);
 		for (ModuleWire bundleWire : requiredBundleWires) {
 			BundleLoader loader = (BundleLoader) bundleWire.getProviderWiring().getModuleLoader();
 			if (loader != null) {

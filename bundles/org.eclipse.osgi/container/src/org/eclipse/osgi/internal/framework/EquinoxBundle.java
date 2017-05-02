@@ -113,7 +113,7 @@ public class EquinoxBundle implements Bundle, BundleReference {
 
 		}
 
-		final List<FrameworkListener> initListeners = new ArrayList<FrameworkListener>(0);
+		final List<FrameworkListener> initListeners = new ArrayList<>(0);
 
 		class EquinoxSystemModule extends SystemModule {
 			public EquinoxSystemModule(ModuleContainer container) {
@@ -135,7 +135,7 @@ public class EquinoxBundle implements Bundle, BundleReference {
 				String initUUID = getEquinoxContainer().getConfiguration().setConfiguration(EquinoxConfiguration.PROP_INIT_UUID, Boolean.TRUE.toString());
 				if (initUUID != null) {
 					// this is not the first framework init, need to generate a new UUID
-					getEquinoxContainer().getConfiguration().setConfiguration(Constants.FRAMEWORK_UUID, new UniversalUniqueIdentifier().toString());
+					getEquinoxContainer().getConfiguration().setConfiguration(Constants.FRAMEWORK_UUID, UUID.randomUUID().toString());
 				}
 				getEquinoxContainer().init();
 				addInitFrameworkListeners();
@@ -387,7 +387,7 @@ public class EquinoxBundle implements Bundle, BundleReference {
 		if (options == 0) {
 			return new StartOptions[0];
 		}
-		Collection<StartOptions> result = new ArrayList<Module.StartOptions>(2);
+		Collection<StartOptions> result = new ArrayList<>(2);
 		if ((options & Bundle.START_TRANSIENT) != 0) {
 			result.add(StartOptions.TRANSIENT);
 		}
@@ -564,9 +564,10 @@ public class EquinoxBundle implements Bundle, BundleReference {
 				return classLoader.loadClass(name);
 			}
 		} catch (ClassNotFoundException e) {
-			// This is an equinox-ism.  Not sure it is worth it to offer an option to disable ...
+			// This is an equinox-ism, check compatibility flag
+			boolean compatibilityLazyTrigger = equinoxContainer.getConfiguration().compatibilityLazyTriggerOnFailLoad;
 			// On failure attempt to activate lazy activating bundles.
-			if (State.LAZY_STARTING.equals(module.getState())) {
+			if (compatibilityLazyTrigger && State.LAZY_STARTING.equals(module.getState())) {
 				try {
 					module.start(StartOptions.LAZY_TRIGGER);
 				} catch (BundleException e1) {
@@ -706,14 +707,14 @@ public class EquinoxBundle implements Bundle, BundleReference {
 			}
 			if (infos.length == 0)
 				return Collections.emptyMap();
-			Map<X509Certificate, List<X509Certificate>> results = new HashMap<X509Certificate, List<X509Certificate>>(infos.length);
+			Map<X509Certificate, List<X509Certificate>> results = new HashMap<>(infos.length);
 			for (int i = 0; i < infos.length; i++) {
 				if (signersType == SIGNERS_TRUSTED && !infos[i].isTrusted())
 					continue;
 				Certificate[] certs = infos[i].getCertificateChain();
 				if (certs == null || certs.length == 0)
 					continue;
-				List<X509Certificate> certChain = new ArrayList<X509Certificate>();
+				List<X509Certificate> certChain = new ArrayList<>();
 				for (int j = 0; j < certs.length; j++)
 					certChain.add((X509Certificate) certs[j]);
 				results.put((X509Certificate) certs[0], certChain);
@@ -961,7 +962,7 @@ public class EquinoxBundle implements Bundle, BundleReference {
 	}
 
 	List<Generation> getGenerations() {
-		List<Generation> result = new ArrayList<Generation>();
+		List<Generation> result = new ArrayList<>();
 		ModuleRevision current = getModule().getCurrentRevision();
 		result.add((Generation) current.getRevisionInfo());
 		ModuleWiring wiring = current.getWiring();

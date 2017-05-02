@@ -15,16 +15,19 @@ import java.lang.reflect.Method;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.jws.WebService;
 import javax.xml.namespace.QName;
 import javax.xml.ws.Endpoint;
 import javax.xml.ws.Service;
-import junit.framework.Test;
-import junit.framework.TestSuite;
+import junit.framework.*;
+import org.eclipse.osgi.internal.loader.ModuleClassLoader;
 import org.eclipse.osgi.tests.OSGiTestsActivator;
 import org.osgi.framework.*;
 import org.osgi.framework.hooks.resolver.ResolverHook;
 import org.osgi.framework.hooks.resolver.ResolverHookFactory;
+import org.osgi.framework.hooks.weaving.WeavingHook;
+import org.osgi.framework.hooks.weaving.WovenClass;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.*;
 import org.osgi.service.packageadmin.ExportedPackage;
@@ -221,14 +224,14 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestC);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestD);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTest);
+			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestD);
+			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestD);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestB);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestB);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestC);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestC);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestA);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestA);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestD);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestD);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTest);
 
 			actualFrameworkEvents = syncListenerResults.getResults(14);
@@ -288,14 +291,14 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestC);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestD);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTest);
+			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestD);
+			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestD);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestB);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestB);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestC);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestC);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestA);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestA);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestD);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestD);
 			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTest);
 
 			actualFrameworkEvents = syncListenerResults.getResults(14);
@@ -311,7 +314,7 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		}
 	}
 
-	public void testBug405918() throws BundleException {
+	public void testBug408629() throws BundleException {
 		Bundle chainTest = installer.installBundle("chain.test"); //$NON-NLS-1$
 		Bundle chainTestA = installer.installBundle("chain.test.a"); //$NON-NLS-1$
 		Bundle chainTestB = installer.installBundle("chain.test.b"); //$NON-NLS-1$
@@ -332,15 +335,15 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		// eager start chainTestD
 		chainTestD.start();
 
-		Object[] expectedEvents = new Object[5];
-		expectedEvents[0] = new BundleEvent(BundleEvent.RESOLVED, chainTestD);
-		expectedEvents[1] = new BundleEvent(BundleEvent.RESOLVED, chainTestC);
-		expectedEvents[2] = new BundleEvent(BundleEvent.RESOLVED, chainTestB);
-		expectedEvents[3] = new BundleEvent(BundleEvent.RESOLVED, chainTestA);
-		expectedEvents[4] = new BundleEvent(BundleEvent.RESOLVED, chainTest);
+		Object[] expectedEvents1 = new Object[5];
+		expectedEvents1[0] = new BundleEvent(BundleEvent.RESOLVED, chainTestD);
+		expectedEvents1[1] = new BundleEvent(BundleEvent.RESOLVED, chainTestC);
+		expectedEvents1[2] = new BundleEvent(BundleEvent.RESOLVED, chainTestB);
+		expectedEvents1[3] = new BundleEvent(BundleEvent.RESOLVED, chainTestA);
+		expectedEvents1[4] = new BundleEvent(BundleEvent.RESOLVED, chainTest);
 
 		Object[] actualEvents = syncListenerResults.getResults(5);
-		compareResults(expectedEvents, actualEvents);
+		compareResults(expectedEvents1, actualEvents);
 		try {
 			System.setProperty("test.bug300692", "true");
 			System.setProperty("test.bug300692.listener", "true");
@@ -351,26 +354,47 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 			Object[] actualFrameworkEvents = frameworkListenerResults.getResults(1);
 			compareResults(expectedFrameworkEvents, actualFrameworkEvents);
 
-			expectedEvents = new Object[14];
-			int i = 0;
+			expectedEvents1 = new Object[14];
+			Object[] expectedEvents2 = new Object[14];
+			int i1 = 0;
+			int i2 = 0;
 
-			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestA);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestB);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestC);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTest);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestB);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestB);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestC);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestC);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestA);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestA);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestD);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTING, chainTestD);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTestD);
-			expectedEvents[i++] = new BundleEvent(BundleEvent.STARTED, chainTest);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestA);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestA);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestB);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestB);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestC);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestC);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTING, chainTest);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTING, chainTest);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestD);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTING, chainTestB);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTING, chainTestB);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTED, chainTestB);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTED, chainTestB);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.LAZY_ACTIVATION, chainTestD);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTING, chainTestD);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTING, chainTestD);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTED, chainTestD);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTED, chainTestD);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTING, chainTestC);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTING, chainTestC);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTED, chainTestC);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTED, chainTestC);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTING, chainTestA);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTING, chainTestA);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTED, chainTestA);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTED, chainTestA);
+			expectedEvents1[i1++] = new BundleEvent(BundleEvent.STARTED, chainTest);
+			expectedEvents2[i2++] = new BundleEvent(BundleEvent.STARTED, chainTest);
 
 			actualFrameworkEvents = syncListenerResults.getResults(14);
-			compareResults(expectedEvents, actualFrameworkEvents);
+			try {
+				compareResults(expectedEvents1, actualFrameworkEvents);
+			} catch (AssertionFailedError e) {
+				// try the second alternative
+				compareResults(expectedEvents2, actualFrameworkEvents);
+			}
 		} finally {
 			System.getProperties().remove("test.bug300692");
 			System.getProperties().remove("test.bug300692.listener");
@@ -487,17 +511,18 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		Object[] actualEvents = simpleResults.getResults(0);
 		compareResults(expectedEvents, actualEvents);
 
-		// test that calling loadClass from a lazy start bundle activates a bundle
+		// test that calling loadClass from a lazy start bundle does not activates a bundle
+		// This is not disabled by default (bug 503742)
 		Bundle legacyA = installer.installBundle("legacy.lazystart.a"); //$NON-NLS-1$
 		try {
 			legacyA.loadClass("does.not.exist.Test"); //$NON-NLS-1$
 		} catch (ClassNotFoundException e) {
 			// expected
 		}
-		expectedEvents = new Object[1];
-		expectedEvents[0] = new BundleEvent(BundleEvent.STARTED, legacyA);
-		actualEvents = simpleResults.getResults(1);
+		expectedEvents = new Object[0];
+		actualEvents = simpleResults.getResults(0);
 		compareResults(expectedEvents, actualEvents);
+		assertEquals("Wrong state for lazy bundle.", Bundle.STARTING, legacyA.getState());
 	}
 
 	public void testOSGiLazyStart() throws Exception {
@@ -2197,5 +2222,122 @@ public class ClassLoadingBundleTests extends AbstractBundleTests {
 		} finally {
 			getContext().removeBundleListener(delayB1);
 		}
+	}
+
+	public void testRecursiveWeavingHookFactory() {
+		final ThreadLocal<Boolean> testThread = new ThreadLocal<Boolean>() {
+			@Override
+			protected Boolean initialValue() {
+				return Boolean.FALSE;
+			}
+		};
+
+		testThread.set(Boolean.TRUE);
+		final Set<String> weavingHookClasses = new HashSet<String>();
+		final List<WovenClass> called = new ArrayList<WovenClass>();
+		final AtomicBoolean loadNewClassInWeave = new AtomicBoolean(false);
+
+		ServiceFactory<WeavingHook> topFactory = new ServiceFactory<WeavingHook>() {
+			@Override
+			public WeavingHook getService(Bundle bundle, ServiceRegistration<WeavingHook> registration) {
+				if (!testThread.get()) {
+					return null;
+				}
+				WeavingHook hook = new WeavingHook() {
+
+					@Override
+					public void weave(WovenClass wovenClass) {
+						if (loadNewClassInWeave.get()) {
+							// Force a load of inner class
+							Runnable run = new Runnable() {
+								@Override
+								public void run() {
+									// nothing
+								}
+							};
+							run.run();
+							weavingHookClasses.add(run.getClass().getName());
+						}
+						called.add(wovenClass);
+					}
+				};
+				weavingHookClasses.add(hook.getClass().getName());
+				return hook;
+			}
+
+			@Override
+			public void ungetService(Bundle bundle, ServiceRegistration<WeavingHook> registration, WeavingHook service) {
+				// nothing
+			}
+		};
+		ServiceRegistration<WeavingHook> reg = getContext().registerService(WeavingHook.class, topFactory, null);
+
+		Runnable run = null;
+		try {
+			// force call to factory without protection of the framework recursion checks
+			topFactory.getService(null, null);
+
+			// set flag to load inner class while weaving
+			loadNewClassInWeave.set(true);
+
+			// Force a load of inner class
+			run = new Runnable() {
+				@Override
+				public void run() {
+					// nothing
+				}
+			};
+			run.run();
+		} finally {
+			reg.unregister();
+		}
+
+		assertEquals("Unexpected number of woven classes.", 3, called.size());
+		for (WovenClass wovenClass : called) {
+			if (weavingHookClasses.contains(wovenClass.getClassName())) {
+				assertNull("Did not expect to find class: " + wovenClass.getDefinedClass(), wovenClass.getDefinedClass());
+			} else {
+				assertEquals("Expected the inner runnable class.", run.getClass(), wovenClass.getDefinedClass());
+			}
+		}
+	}
+
+	public void testLoaderUninstalledBundle() throws BundleException, IOException {
+		String testResourcePath = "testResource";
+		File config = OSGiTestsActivator.getContext().getDataFile(getName()); //$NON-NLS-1$
+		Map<String, String> testHeaders = new HashMap<String, String>();
+		testHeaders.put(Constants.BUNDLE_MANIFESTVERSION, "2");
+		testHeaders.put(Constants.BUNDLE_SYMBOLICNAME, getName());
+		config.mkdirs();
+		File testBundleFile = SystemBundleTests.createBundle(config, getName(), testHeaders, Collections.singletonMap(testResourcePath, "testValue"));
+		Bundle test = getContext().installBundle(getName(), new FileInputStream(testBundleFile));
+		test.start();
+		BundleWiring wiring = test.adapt(BundleWiring.class);
+		assertNotNull("No wiring found.", wiring);
+		ModuleClassLoader bundleClassLoader = (ModuleClassLoader) wiring.getClassLoader();
+		URL testResource = bundleClassLoader.findLocalResource(testResourcePath);
+		assertNotNull("No test resource found.", testResource);
+
+		test.update(new FileInputStream(testBundleFile));
+		testResource = bundleClassLoader.findLocalResource(testResourcePath);
+		assertNull("Found resource.", testResource);
+
+		Object[] expectedFrameworkEvents = new Object[] {new FrameworkEvent(FrameworkEvent.INFO, test, null)};
+		Object[] actualFrameworkEvents = frameworkListenerResults.getResults(1);
+		compareResults(expectedFrameworkEvents, actualFrameworkEvents);
+
+		wiring = test.adapt(BundleWiring.class);
+		assertNotNull("No wiring found.", wiring);
+		bundleClassLoader = (ModuleClassLoader) wiring.getClassLoader();
+		testResource = bundleClassLoader.findLocalResource(testResourcePath);
+		assertNotNull("No test resource found.", testResource);
+
+		test.uninstall();
+
+		testResource = bundleClassLoader.findLocalResource(testResourcePath);
+		assertNull("Found resource.", testResource);
+
+		actualFrameworkEvents = frameworkListenerResults.getResults(1);
+		compareResults(expectedFrameworkEvents, actualFrameworkEvents);
 	}
 }

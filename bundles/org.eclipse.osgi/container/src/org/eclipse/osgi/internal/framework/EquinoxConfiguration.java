@@ -34,6 +34,7 @@ import org.eclipse.osgi.internal.debug.Debug;
 import org.eclipse.osgi.internal.debug.FrameworkDebugOptions;
 import org.eclipse.osgi.internal.hookregistry.HookRegistry;
 import org.eclipse.osgi.internal.location.EquinoxLocations;
+import org.eclipse.osgi.internal.location.LocationHelper;
 import org.eclipse.osgi.internal.messages.Msg;
 import org.eclipse.osgi.service.datalocation.Location;
 import org.eclipse.osgi.service.debug.DebugOptions;
@@ -92,6 +93,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 
 	public final boolean contextBootDelegation;
 	public final boolean compatibilityBootDelegation;
+	public final boolean compatibilityLazyTriggerOnFailLoad;
 
 	public final List<String> LIB_EXTENSIONS;
 	public final List<String> ECLIPSE_LIB_VARIANTS;
@@ -149,6 +151,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 	public static final String PROP_COMPATIBILITY_BOOTDELEGATION = "osgi.compatibility.bootdelegation"; //$NON-NLS-1$
 	public static final String PROP_COMPATIBILITY_ERROR_FAILED_START = "osgi.compatibility.errorOnFailedStart"; //$NON-NLS-1$
 	public static final String PROP_COMPATIBILITY_START_LAZY = "osgi.compatibility.eagerStart.LazyActivation"; //$NON-NLS-1$
+	public static final String PROP_COMPATIBILITY_START_LAZY_ON_FAIL_CLASSLOAD = "osgi.compatibility.trigger.lazyActivation.onFailedClassLoad"; //$NON-NLS-1$
 
 	public static final String PROP_OSGI_OS = "osgi.os"; //$NON-NLS-1$
 	public static final String PROP_OSGI_WS = "osgi.ws"; //$NON-NLS-1$
@@ -209,6 +212,9 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 	public static final Collection<String> PROP_WITH_ECLIPSE_STARTER_DEFAULTS = Collections.singletonList(PROP_COMPATIBILITY_BOOTDELEGATION);
 	public static final String PROP_INIT_UUID = "equinox.init.uuid"; //$NON-NLS-1$
 
+	public static final String PROP_ACTIVE_THREAD_TYPE = "osgi.framework.activeThreadType"; //$NON-NLS-1$
+	public static final String ACTIVE_THREAD_TYPE_NORMAL = "normal"; //$NON-NLS-1$
+
 	public static final class ConfigValues {
 		/**
 		 * Value of {@link #localConfig} properties that should be considered
@@ -225,7 +231,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 		private final Properties localConfig;
 
 		public ConfigValues(Map<String, ?> initialConfiguration) {
-			this.initialConfig = initialConfiguration == null ? new HashMap<String, Object>(0) : new HashMap<String, Object>(initialConfiguration);
+			this.initialConfig = initialConfiguration == null ? new HashMap<String, Object>(0) : new HashMap<>(initialConfiguration);
 			Object useSystemPropsValue = initialConfig.get(PROP_USE_SYSTEM_PROPERTIES);
 			this.useSystemProperties = useSystemPropsValue == null ? false : Boolean.parseBoolean(useSystemPropsValue.toString());
 			Properties tempConfiguration = useSystemProperties ? EquinoxContainer.secureAction.getProperties() : new Properties();
@@ -317,7 +323,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 			if (location == null)
 				return result;
 			try {
-				InputStream in = location.openStream();
+				InputStream in = LocationHelper.getStream(location);
 				try {
 					result.load(in);
 				} finally {
@@ -467,7 +473,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 			Properties props = useSystemProperties ? EquinoxContainer.secureAction.getProperties() : localConfig;
 			// must sync on props to avoid concurrent modification exception
 			synchronized (props) {
-				Map<String, String> result = new HashMap<String, String>(props.size());
+				Map<String, String> result = new HashMap<>(props.size());
 				for (Object key : props.keySet()) {
 					if (key instanceof String) {
 						String skey = (String) key;
@@ -520,13 +526,13 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 				URL location = new URL(osgiDev);
 
 				if ("file".equals(location.getProtocol())) { //$NON-NLS-1$
-					f = new File(location.getFile());
+					f = LocationHelper.decodePath(new File(location.getPath()));
 					devLastModified = f.lastModified();
 				}
 
 				// Check the osgi.dev property to see if dev classpath entries have been defined.
 				try {
-					loadDevProperties(location.openStream());
+					loadDevProperties(LocationHelper.getStream(location));
 					devMode = true;
 				} catch (IOException e) {
 					// TODO consider logging
@@ -541,6 +547,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 
 		contextBootDelegation = "true".equals(getConfiguration(PROP_CONTEXT_BOOTDELEGATION, "true")); //$NON-NLS-1$ //$NON-NLS-2$
 		compatibilityBootDelegation = "true".equals(getConfiguration(PROP_COMPATIBILITY_BOOTDELEGATION)); //$NON-NLS-1$
+		compatibilityLazyTriggerOnFailLoad = "true".equals(getConfiguration(PROP_COMPATIBILITY_START_LAZY_ON_FAIL_CLASSLOAD)); //$NON-NLS-1$
 
 		COPY_NATIVES = Boolean.valueOf(getConfiguration(PROP_COPY_NATIVES)).booleanValue();
 		String[] libExtensions = ManifestElement.getArrayFromList(getConfiguration(EquinoxConfiguration.PROP_FRAMEWORK_LIBRARY_EXTENSIONS, getConfiguration(org.osgi.framework.Constants.FRAMEWORK_LIBRARY_EXTENSIONS, getOSLibraryExtDefaults())), ","); //$NON-NLS-1$
@@ -600,7 +607,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 	}
 
 	private static List<String> buildEclipseLibraryVariants(String ws, String os, String arch, String nl) {
-		List<String> result = new ArrayList<String>();
+		List<String> result = new ArrayList<>();
 		result.add("ws/" + ws + "/"); //$NON-NLS-1$ //$NON-NLS-2$
 		result.add("os/" + os + "/" + arch + "/"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 		result.add("os/" + os + "/"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -615,7 +622,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 	}
 
 	private static List<String> buildNLJarVariants(String nl) {
-		List<String> result = new ArrayList<String>();
+		List<String> result = new ArrayList<>();
 		nl = nl.replace('_', '/');
 		while (nl.length() > 0) {
 			result.add("nl/" + nl + "/"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -897,13 +904,13 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 				setConfiguration(PROP_FRAMEWORK, externalForm);
 			}
 			if (getConfiguration(EquinoxLocations.PROP_INSTALL_AREA) == null) {
-				String filePart = getFrameworkPath(url.getFile(), true);
+				String filePart = getFrameworkPath(url.getPath(), true);
 				setConfiguration(EquinoxLocations.PROP_INSTALL_AREA, filePart);
 			}
 		}
 		// always decode these properties
-		setConfiguration(PROP_FRAMEWORK, decode(getConfiguration(PROP_FRAMEWORK)));
-		setConfiguration(EquinoxLocations.PROP_INSTALL_AREA, decode(getConfiguration(EquinoxLocations.PROP_INSTALL_AREA)));
+		setConfiguration(PROP_FRAMEWORK, LocationHelper.decode(getConfiguration(PROP_FRAMEWORK), true));
+		setConfiguration(EquinoxLocations.PROP_INSTALL_AREA, LocationHelper.decode(getConfiguration(EquinoxLocations.PROP_INSTALL_AREA), true));
 
 		setConfiguration(FRAMEWORK_VENDOR, ECLIPSE_FRAMEWORK_VENDOR);
 		String value = getConfiguration(FRAMEWORK_PROCESSOR);
@@ -1026,7 +1033,7 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 		}
 
 		// set the initial UUID so that it is set as soon as possible
-		String uuid = new UniversalUniqueIdentifier().toString();
+		String uuid = UUID.randomUUID().toString();
 		setConfiguration(FRAMEWORK_UUID, uuid);
 	}
 
@@ -1063,30 +1070,6 @@ public class EquinoxConfiguration implements EnvironmentInfo {
 			if (sb.length() > 0)
 				return Integer.parseInt(sb.toString());
 			return 0;
-		}
-	}
-
-	public static String decode(String urlString) {
-		//first encode '+' characters, because URLDecoder incorrectly converts 
-		//them to spaces on certain class library implementations.
-		if (urlString.indexOf('+') >= 0) {
-			int len = urlString.length();
-			StringBuffer buf = new StringBuffer(len);
-			for (int i = 0; i < len; i++) {
-				char c = urlString.charAt(i);
-				if (c == '+')
-					buf.append("%2B"); //$NON-NLS-1$
-				else
-					buf.append(c);
-			}
-			urlString = buf.toString();
-		}
-		try {
-			return URLDecoder.decode(urlString, "UTF-8"); //$NON-NLS-1$
-		} catch (UnsupportedEncodingException e) {
-			// Tried but failed
-			// TODO should we throw runtime exception here?
-			return urlString;
 		}
 	}
 
